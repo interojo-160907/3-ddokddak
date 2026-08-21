@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+
+build/
+dist/
+data/
+logs/
+screenshots/
+_백업/
+
+installer/output/
+installer/compile-*.log
+
+*.tmp
+.env
+.env.*

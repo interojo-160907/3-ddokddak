@@ -1,0 +1,29 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 1, 3, 0),
+    prodvers=(0, 1, 3, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '041204B0',
+        [
+          StringStruct('CompanyName', '생산기획팀 RD'),
+          StringStruct('FileDescription', '생산3팀 납기 통합조회'),
+          StringStruct('FileVersion', '0.1.3'),
+          StringStruct('InternalName', 'gui_app_pyside6'),
+          StringStruct('OriginalFilename', 'gui_app_pyside6.exe'),
+          StringStruct('ProductName', '똑딱이 생산3팀 납기 통합조회'),
+          StringStruct('ProductVersion', '0.1.3')
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [1042, 1200])])
+  ]
+)
