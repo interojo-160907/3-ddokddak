@@ -1196,6 +1196,11 @@ class MainWindow(QMainWindow):
             max_workers=1,
             thread_name_prefix="ddokddak-permission",
         )
+        self._notice_check_future = None
+        self._notice_check_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ddokddak-notice",
+        )
         self._build_shell()
         self.notice_ticker.replace_notices(self.management_notices)
         self.show_page("dashboard")
@@ -1220,6 +1225,11 @@ class MainWindow(QMainWindow):
         self.permission_check_timer.timeout.connect(self._start_runtime_permission_check)
         self.permission_check_timer.start()
         QTimer.singleShot(3_000, self._start_runtime_permission_check)
+        self.notice_check_timer = QTimer(self)
+        self.notice_check_timer.setInterval(15_000)
+        self.notice_check_timer.timeout.connect(self._start_notice_check)
+        self.notice_check_timer.start()
+        QTimer.singleShot(12_000, self._start_notice_check)
         self._apply_collection_timers(run_initial=True)
         QTimer.singleShot(5_000, self._run_scheduled_collections)
         QTimer.singleShot(20_000, lambda: self._start_data_cleanup(scheduled=True))
@@ -1482,10 +1492,43 @@ class MainWindow(QMainWindow):
         else:
             event.ignore()
 
+    def _start_notice_check(self) -> None:
+        if self._notice_check_future is not None and not self._notice_check_future.done():
+            return
+        gate = ProgramGate(APP_VERSION, timeout=5)
+        self._notice_check_future = self._notice_check_executor.submit(
+            gate.check,
+            allow_cache_fallback=False,
+        )
+        QTimer.singleShot(200, self._finish_notice_check)
+
+    def _finish_notice_check(self) -> None:
+        future = self._notice_check_future
+        if future is None:
+            return
+        if not future.done():
+            QTimer.singleShot(200, self._finish_notice_check)
+            return
+        self._notice_check_future = None
+        try:
+            result = future.result()
+        except Exception:
+            return
+        if result.source != "remote" or not result.allowed:
+            return
+        notices = tuple(result.notices)
+        if notices == tuple(self.management_notices):
+            return
+        self.management_notices = notices
+        self.notice_ticker.replace_notices(notices)
+
     def _shutdown_permission_checker(self) -> None:
         if hasattr(self, "permission_check_timer"):
             self.permission_check_timer.stop()
+        if hasattr(self, "notice_check_timer"):
+            self.notice_check_timer.stop()
         self._permission_check_executor.shutdown(wait=False, cancel_futures=True)
+        self._notice_check_executor.shutdown(wait=False, cancel_futures=True)
 
     def _start_runtime_permission_check(self, manual: bool = False) -> None:
         if self._permission_check_future is not None and not self._permission_check_future.done():
@@ -1500,8 +1543,10 @@ class MainWindow(QMainWindow):
         if manual and hasattr(self, "settings_update_button"):
             self.settings_update_button.setEnabled(False)
             self.settings_update_button.setText("확인 중…")
+        gate = ProgramGate(APP_VERSION, timeout=8)
         self._permission_check_future = self._permission_check_executor.submit(
-            ProgramGate(APP_VERSION).check
+            gate.check,
+            allow_cache_fallback=False,
         )
         QTimer.singleShot(200, self._finish_runtime_permission_check)
 

@@ -94,7 +94,7 @@ def _update_url(value: object) -> str:
 
 
 class ProgramGate:
-    def __init__(self, current_version: str, timeout: int = 30) -> None:
+    def __init__(self, current_version: str, timeout: int = 8) -> None:
         self.current_version = current_version
         self.timeout = timeout
         self.endpoint = resolve_management_api_url()
@@ -122,7 +122,7 @@ class ProgramGate:
             message="최근 확인된 사용 권한 정상",
         )
 
-    def check(self) -> GateResult:
+    def check(self, *, allow_cache_fallback: bool = True) -> GateResult:
         if not self.endpoint:
             return GateResult(
                 allowed=True,
@@ -138,7 +138,7 @@ class ProgramGate:
             if not isinstance(data, dict):
                 raise ValueError("관리 API 응답 형식이 올바르지 않습니다.")
         except (requests.RequestException, ValueError, TypeError) as exc:
-            cached = self._cached_result()
+            cached = self._cached_result() if allow_cache_fallback else None
             if cached is not None:
                 return GateResult(
                     **cached,
