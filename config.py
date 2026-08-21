@@ -31,6 +31,12 @@ LOG_DIR = ROOT_DIR / "logs"
 def ensure_directories() -> None:
     for path in (
         DATA_CENTER_DIR,
+        DATA_CENTER_DIR / "bom" / "snapshot",
+        DATA_CENTER_DIR / "bom" / "backups",
+        DATA_CENTER_DIR / "process-status" / "snapshot",
+        DATA_CENTER_DIR / "process-status" / "backups",
+        DATA_CENTER_DIR / "production-performance" / "snapshot",
+        DATA_CENTER_DIR / "production-performance" / "backups",
         LEAD_SHEET_PDF_BACKUP_DIR,
         LEAD_SHEET_PREVIEW_CACHE_DIR,
         ASSET_DIR,

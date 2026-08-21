@@ -93,6 +93,7 @@ from services.collection_schedule import load_schedule, save_schedule
 from services.dashboard_service import DashboardService
 from services.process_status_service import ProcessStatusService, business_sort_key, classification_sort_key
 from services.program_gate import DEFAULT_UPDATE_URL, ProgramGate
+from services.api_health import check_collection_apis
 from ui.bom_page import BomStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
 from ui.notice_ticker import NoticeTicker
@@ -1201,6 +1202,11 @@ class MainWindow(QMainWindow):
             max_workers=1,
             thread_name_prefix="ddokddak-notice",
         )
+        self._api_health_future: Future | None = None
+        self._api_health_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="ddokddak-api-health",
+        )
         self._build_shell()
         self.notice_ticker.replace_notices(self.management_notices)
         self.show_page("dashboard")
@@ -1230,6 +1236,11 @@ class MainWindow(QMainWindow):
         self.notice_check_timer.timeout.connect(self._start_notice_check)
         self.notice_check_timer.start()
         QTimer.singleShot(12_000, self._start_notice_check)
+        self.api_health_timer = QTimer(self)
+        self.api_health_timer.setInterval(60_000)
+        self.api_health_timer.timeout.connect(self._start_api_health_check)
+        self.api_health_timer.start()
+        QTimer.singleShot(800, self._start_api_health_check)
         self._apply_collection_timers(run_initial=True)
         QTimer.singleShot(5_000, self._run_scheduled_collections)
         QTimer.singleShot(20_000, lambda: self._start_data_cleanup(scheduled=True))
@@ -1300,6 +1311,11 @@ class MainWindow(QMainWindow):
         self._refresh_header_status()
 
     def _start_aps_monitor_check(self) -> None:
+        if (
+            hasattr(self, "settings_collection_process")
+            and self.settings_collection_process.state() != QProcess.NotRunning
+        ):
+            return
         if (
             hasattr(self, "aps_monitor_process")
             and self.aps_monitor_process.state() != QProcess.NotRunning
@@ -1527,8 +1543,12 @@ class MainWindow(QMainWindow):
             self.permission_check_timer.stop()
         if hasattr(self, "notice_check_timer"):
             self.notice_check_timer.stop()
+        if hasattr(self, "api_health_timer"):
+            self.api_health_timer.stop()
+        ProgramGate(APP_VERSION, timeout=2).set_connection(False)
         self._permission_check_executor.shutdown(wait=False, cancel_futures=True)
         self._notice_check_executor.shutdown(wait=False, cancel_futures=True)
+        self._api_health_executor.shutdown(wait=False, cancel_futures=True)
 
     def _start_runtime_permission_check(self, manual: bool = False) -> None:
         if self._permission_check_future is not None and not self._permission_check_future.done():
@@ -1547,6 +1567,7 @@ class MainWindow(QMainWindow):
         self._permission_check_future = self._permission_check_executor.submit(
             gate.check,
             allow_cache_fallback=False,
+            report_connection=True,
         )
         QTimer.singleShot(200, self._finish_runtime_permission_check)
 
@@ -4348,7 +4369,7 @@ class MainWindow(QMainWindow):
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
-        for column, text in enumerate(("데이터", "현재 상태", "마지막 갱신", "저장 건수", "자동 주기", "수동 실행")):
+        for column, text in enumerate(("데이터", "접속 상태", "현재 상태", "마지막 갱신", "저장 건수", "자동 주기", "수동 실행")):
             label = QLabel(text)
             label.setObjectName("CollectionHeader")
             grid.addWidget(label, 0, column)
@@ -4368,6 +4389,9 @@ class MainWindow(QMainWindow):
             name_box.addWidget(name_label)
             name_box.addWidget(sub_label)
             grid.addLayout(name_box, row_index, 0)
+            connection = QLabel("● 확인 중")
+            connection.setObjectName("CollectionState")
+            connection.setStyleSheet("color: #64748b; font-weight: 700;")
             state = QLabel("확인 중")
             state.setObjectName("CollectionState")
             refreshed = QLabel("-")
@@ -4387,17 +4411,19 @@ class MainWindow(QMainWindow):
             manual = QPushButton("지금 갱신")
             manual.setObjectName("SecondaryButton")
             manual.clicked.connect(lambda _checked=False, source=key: self._start_data_collection(source))
-            grid.addWidget(state, row_index, 1)
-            grid.addWidget(refreshed, row_index, 2)
-            grid.addWidget(rows, row_index, 3)
-            grid.addWidget(schedule, row_index, 4)
-            grid.addWidget(manual, row_index, 5)
+            grid.addWidget(connection, row_index, 1)
+            grid.addWidget(state, row_index, 2)
+            grid.addWidget(refreshed, row_index, 3)
+            grid.addWidget(rows, row_index, 4)
+            grid.addWidget(schedule, row_index, 5)
+            grid.addWidget(manual, row_index, 6)
             self.collection_controls[key] = {
+                "connection": connection,
                 "state": state, "refreshed": refreshed, "rows": rows,
                 "schedule": schedule, "manual": manual,
             }
         grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(2, 1)
+        grid.setColumnStretch(3, 1)
         detail_layout.addLayout(grid)
 
         footer = QHBoxLayout()
@@ -4483,14 +4509,39 @@ class MainWindow(QMainWindow):
         )
 
     def _apply_collection_timers(self, *, run_initial: bool = False) -> None:
-        minutes = int(self.collection_schedule.get("aps_minutes", 1))
-        if minutes <= 0:
-            self.aps_monitor_timer.stop()
-        else:
-            self.aps_monitor_timer.setInterval(minutes * 60_000)
-            self.aps_monitor_timer.start()
-            if run_initial:
-                QTimer.singleShot(3_000, self._start_aps_monitor_check)
+        self.aps_monitor_timer.stop()
+
+    def _start_api_health_check(self) -> None:
+        if self._api_health_future is not None and not self._api_health_future.done():
+            return
+        self._api_health_future = self._api_health_executor.submit(check_collection_apis, 6.0)
+        QTimer.singleShot(100, self._finish_api_health_check)
+
+    def _finish_api_health_check(self) -> None:
+        future = self._api_health_future
+        if future is None:
+            return
+        if not future.done():
+            QTimer.singleShot(100, self._finish_api_health_check)
+            return
+        self._api_health_future = None
+        try:
+            results = future.result()
+        except Exception:
+            results = {"bom": False, "aps": False, "production": False}
+        for key, connected in results.items():
+            controls = getattr(self, "collection_controls", {}).get(key)
+            if not controls:
+                continue
+            label = controls.get("connection")
+            if label is None:
+                continue
+            label.setText("● 원활" if connected else "● 확인 필요")
+            label.setStyleSheet(
+                "color: #059669; font-weight: 800;"
+                if connected
+                else "color: #d97706; font-weight: 800;"
+            )
 
     @staticmethod
     def _status_refreshed_at(path: Path) -> datetime | None:
@@ -4508,11 +4559,15 @@ class MainWindow(QMainWindow):
     def _run_scheduled_collections(self) -> None:
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             return
+        if hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
+            return
         now = datetime.now()
         definitions = (
             ("bom", DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json"),
+            ("aps", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json"),
             ("production", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
         )
+        due_sources: list[str] = []
         for source, status_path in definitions:
             minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
             if minutes <= 0:
@@ -4526,10 +4581,23 @@ class MainWindow(QMainWindow):
                 and str(status.get("daily_full_date") or "") != now.date().isoformat()
             )
             due = daily_full_due or refreshed is None or (now - refreshed) >= timedelta(minutes=minutes)
-            retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=max(5, minutes))
+            retry_minutes = max(1 if source == "aps" else 5, minutes)
+            retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
             if due and retry_ready:
-                self._start_data_collection(source, scheduled=True)
-                break
+                due_sources.append(source)
+        if not due_sources:
+            return
+        if len(due_sources) >= 2:
+            for source in due_sources:
+                self._collection_last_attempt[source] = now
+            self._start_data_collection("all", scheduled=True)
+            return
+        source = due_sources[0]
+        self._collection_last_attempt[source] = now
+        if source == "aps":
+            self._start_aps_monitor_check()
+        else:
+            self._start_data_collection(source, scheduled=True)
 
     def _start_data_cleanup(self, _checked: bool = False, *, scheduled: bool = False) -> None:
         if hasattr(self, "data_cleanup_process") and self.data_cleanup_process.state() != QProcess.NotRunning:
@@ -4625,8 +4693,7 @@ class MainWindow(QMainWindow):
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
-        if int(self.collection_schedule.get("aps_minutes", 0)) > 0 and source in {"all", "aps"}:
-            QTimer.singleShot(3_000, self._start_aps_monitor_check)
+        QTimer.singleShot(1_000, self._run_scheduled_collections)
 
     def _full_data_refresh_finished(self, exit_code: int, exit_status) -> None:
         """이전 연결 지점과의 호환용."""

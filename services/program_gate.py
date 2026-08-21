@@ -122,7 +122,12 @@ class ProgramGate:
             message="최근 확인된 사용 권한 정상",
         )
 
-    def check(self, *, allow_cache_fallback: bool = True) -> GateResult:
+    def check(
+        self,
+        *,
+        allow_cache_fallback: bool = True,
+        report_connection: bool = False,
+    ) -> GateResult:
         if not self.endpoint:
             return GateResult(
                 allowed=True,
@@ -130,6 +135,14 @@ class ProgramGate:
                 source="not_configured",
             )
         payload = self.identity()
+        if report_connection:
+            payload.update(
+                {
+                    "connected": True,
+                    "connection_status": "접속중",
+                    "heartbeat_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                }
+            )
         try:
             response = requests.post(self.endpoint, json=payload, timeout=self.timeout)
             response.raise_for_status()
@@ -175,6 +188,25 @@ class ProgramGate:
         if result.allowed:
             self._save_cache(result)
         return result
+
+    def set_connection(self, connected: bool) -> bool:
+        if not self.endpoint:
+            return False
+        payload: dict[str, Any] = self.identity()
+        payload.update(
+            {
+                "action": "presence",
+                "connected": bool(connected),
+                "connection_status": "접속중" if connected else "",
+                "heartbeat_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            }
+        )
+        try:
+            response = requests.post(self.endpoint, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+            return True
+        except requests.RequestException:
+            return False
 
     def _cached_result(
         self,
