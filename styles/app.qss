@@ -524,8 +524,8 @@ QTableWidget#DashboardTable {
     color: #334155;
     background: #FFFFFF;
     alternate-background-color: #FAFBFD;
-    selection-color: #FFFFFF;
-    selection-background-color: #1F7784;
+    selection-color: #075CCF;
+    selection-background-color: #E8F2FF;
     border: 1px solid #E3E8EE;
     border-radius: 8px;
     gridline-color: #E8ECF1;
@@ -536,9 +536,13 @@ QTableWidget#DashboardTable::item {
     font-size: 10px;
 }
 
-QTableWidget#DashboardTable::item:selected {
-    color: #FFFFFF;
-    background: #1F7784;
+QTableWidget#DashboardTable::item:selected,
+QTableWidget#DashboardTable::item:selected:active,
+QTableWidget#DashboardTable::item:selected:!active {
+    color: #075CCF;
+    background: #E8F2FF;
+    border-top: 1px solid #A8CCF5;
+    border-bottom: 1px solid #A8CCF5;
 }
 
 QTableWidget#DashboardTable QHeaderView::section {
