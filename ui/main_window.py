@@ -4394,6 +4394,22 @@ class MainWindow(QMainWindow):
             connection.setStyleSheet("color: #64748b; font-weight: 700;")
             state = QLabel("확인 중")
             state.setObjectName("CollectionState")
+            error_button = QPushButton("오류 확인")
+            error_button.setVisible(False)
+            error_button.setCursor(Qt.PointingHandCursor)
+            error_button.setStyleSheet(
+                "QPushButton { color:#b42318; background:#fff4f2; border:1px solid #fecdca; "
+                "border-radius:7px; padding:4px 9px; font-weight:800; } "
+                "QPushButton:hover { background:#fee4e2; border-color:#fda29b; }"
+            )
+            error_button.clicked.connect(
+                lambda _checked=False, source=key: self._show_collection_error(source)
+            )
+            state_box = QVBoxLayout()
+            state_box.setContentsMargins(0, 0, 0, 0)
+            state_box.setSpacing(3)
+            state_box.addWidget(state)
+            state_box.addWidget(error_button, 0, Qt.AlignLeft)
             refreshed = QLabel("-")
             refreshed.setObjectName("CollectionCell")
             rows = QLabel("-")
@@ -4412,14 +4428,15 @@ class MainWindow(QMainWindow):
             manual.setObjectName("SecondaryButton")
             manual.clicked.connect(lambda _checked=False, source=key: self._start_data_collection(source))
             grid.addWidget(connection, row_index, 1)
-            grid.addWidget(state, row_index, 2)
+            grid.addLayout(state_box, row_index, 2)
             grid.addWidget(refreshed, row_index, 3)
             grid.addWidget(rows, row_index, 4)
             grid.addWidget(schedule, row_index, 5)
             grid.addWidget(manual, row_index, 6)
             self.collection_controls[key] = {
                 "connection": connection,
-                "state": state, "refreshed": refreshed, "rows": rows,
+                "state": state, "error_button": error_button,
+                "refreshed": refreshed, "rows": rows,
                 "schedule": schedule, "manual": manual,
             }
         grid.setColumnStretch(0, 2)
@@ -4460,6 +4477,115 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError):
             return {}
 
+    @staticmethod
+    def _collection_error_path() -> Path:
+        return DATA_CENTER_DIR / "settings" / "collection_errors.json"
+
+    @classmethod
+    def _read_collection_errors(cls) -> dict:
+        path = cls._collection_error_path()
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    @classmethod
+    def _write_collection_errors(cls, errors: dict) -> None:
+        path = cls._collection_error_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(errors, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary.replace(path)
+
+    def _record_collection_error(self, source: str, exit_code: int, message: str) -> None:
+        labels = {"bom": "BOM", "aps": "S관 APS", "production": "생산실적"}
+        targets = ("bom", "aps", "production") if source == "all" else (source,)
+        errors = self._read_collection_errors()
+        occurred_at = datetime.now().isoformat(timespec="seconds")
+        clean_message = str(message or "수집기가 오류 내용을 반환하지 않았습니다.").strip()
+        for key in targets:
+            errors[key] = {
+                "source": labels.get(key, key),
+                "occurred_at": occurred_at,
+                "exit_code": int(exit_code),
+                "message": clean_message,
+            }
+        self._write_collection_errors(errors)
+
+    def _clear_collection_errors(self, source: str) -> None:
+        targets = ("bom", "aps", "production") if source == "all" else (source,)
+        errors = self._read_collection_errors()
+        changed = False
+        for key in targets:
+            if key in errors:
+                del errors[key]
+                changed = True
+        if changed:
+            self._write_collection_errors(errors)
+
+    def _show_collection_error(self, source: str) -> None:
+        from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit
+
+        info = self._read_collection_errors().get(source)
+        if not isinstance(info, dict):
+            return
+        source_name = str(info.get("source") or source)
+        occurred_at = str(info.get("occurred_at") or "-").replace("T", " ")
+        exit_code = info.get("exit_code", "-")
+        message = str(info.get("message") or "오류 내용이 없습니다.")
+        copy_text = (
+            f"수집 항목: {source_name}\n"
+            f"발생 시각: {occurred_at}\n"
+            f"종료 코드: {exit_code}\n\n"
+            f"{message}"
+        )
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("똑딱이 수집 오류")
+        dialog.setModal(True)
+        dialog.resize(720, 430)
+        dialog.setStyleSheet(
+            "QDialog { background:#f8fafc; } "
+            "QLabel#ErrorDialogTitle { color:#101828; font-size:18px; font-weight:900; } "
+            "QLabel#ErrorDialogMeta { color:#667085; font-size:12px; } "
+            "QPlainTextEdit { background:white; color:#344054; border:1px solid #d0d5dd; "
+            "border-radius:10px; padding:12px; font-family:'Malgun Gothic'; font-size:12px; }"
+        )
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 22, 24, 20)
+        layout.setSpacing(12)
+        title = QLabel(f"{source_name} 수집 오류")
+        title.setObjectName("ErrorDialogTitle")
+        meta = QLabel(f"발생 시각  {occurred_at}    ·    종료 코드  {exit_code}")
+        meta.setObjectName("ErrorDialogMeta")
+        details = QPlainTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText(message)
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        copy_button = QPushButton("오류 내용 복사")
+        copy_button.setObjectName("PrimaryButton")
+        close_button = QPushButton("닫기")
+        close_button.setObjectName("SecondaryButton")
+
+        def copy_error() -> None:
+            QApplication.clipboard().setText(copy_text)
+            copy_button.setText("복사 완료")
+
+        copy_button.clicked.connect(copy_error)
+        close_button.clicked.connect(dialog.accept)
+        buttons.addWidget(copy_button)
+        buttons.addWidget(close_button)
+        layout.addWidget(title)
+        layout.addWidget(meta)
+        layout.addWidget(details, 1)
+        layout.addLayout(buttons)
+        dialog.exec()
+
     def _refresh_settings_data_status(self) -> None:
         if not hasattr(self, "settings_data_status"):
             return
@@ -4469,6 +4595,7 @@ class MainWindow(QMainWindow):
             ("production", "생산실적", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json", ("stored_rows", "s_factory_rows")),
         )
         parts = []
+        collection_errors = self._read_collection_errors()
         for key, name, path, count_keys in definitions:
             status = self._read_refresh_status(path)
             counts = [int(status[key]) for key in count_keys if status.get(key) is not None]
@@ -4478,8 +4605,13 @@ class MainWindow(QMainWindow):
             controls = getattr(self, "collection_controls", {}).get(key)
             if controls:
                 status_value = str(status.get("status") or "")
-                success = status_value in {"success", "skipped"}
+                error_info = collection_errors.get(key)
+                has_error = isinstance(error_info, dict) and bool(error_info.get("message"))
+                success = status_value in {"success", "skipped"} and not has_error
                 state_text = (
+                    "● 오류 발생"
+                    if has_error
+                    else
                     "● 정상 · 변경 없음"
                     if status_value == "skipped"
                     else "● 정상" if success else "● 확인 필요"
@@ -4491,6 +4623,10 @@ class MainWindow(QMainWindow):
                 controls["state"].setProperty("state", "success" if success else "warning")
                 controls["state"].style().unpolish(controls["state"])
                 controls["state"].style().polish(controls["state"])
+                controls["error_button"].setVisible(has_error)
+                controls["error_button"].setToolTip(
+                    str(error_info.get("message") or "")[:500] if has_error else ""
+                )
                 controls["refreshed"].setText(str(refreshed).replace("T", " ")[:19])
                 controls["rows"].setText(f"{count_text}건" if count_text else "-")
                 if key == "production":
@@ -4670,6 +4806,9 @@ class MainWindow(QMainWindow):
         process.finished.connect(
             lambda exit_code, exit_status, selected=source: self._data_collection_finished(selected, exit_code, exit_status)
         )
+        process.errorOccurred.connect(
+            lambda process_error, selected=source: self._data_collection_process_error(selected, process_error)
+        )
         self.settings_collection_process = process
         self.settings_refresh_process = process
         process.start()
@@ -4684,16 +4823,34 @@ class MainWindow(QMainWindow):
 
     def _data_collection_finished(self, source: str, exit_code: int, _exit_status) -> None:
         self._set_collection_busy(False)
-        self._refresh_settings_data_status()
         if exit_code != 0:
-            error = bytes(self.settings_collection_process.readAllStandardError()).decode("utf-8", errors="replace").strip()
-            self.settings_data_status.setText(f"수집 실패: {error[-240:] or '수집 로그를 확인하세요.'}")
+            stderr = bytes(self.settings_collection_process.readAllStandardError()).decode("utf-8", errors="replace").strip()
+            stdout = bytes(self.settings_collection_process.readAllStandardOutput()).decode("utf-8", errors="replace").strip()
+            error = stderr or stdout or self.settings_collection_process.errorString()
+            self._record_collection_error(source, exit_code, error)
+            self._refresh_settings_data_status()
+            self.settings_data_status.setText(
+                f"수집 실패 · 상세 설정의 오류 확인 버튼을 눌러 내용을 확인하거나 복사하세요."
+            )
             return
+        self._clear_collection_errors(source)
+        self._refresh_settings_data_status()
         changed = {"bom", "aps", "production"} if source == "all" else {source}
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
         QTimer.singleShot(1_000, self._run_scheduled_collections)
+
+    def _data_collection_process_error(self, source: str, process_error) -> None:
+        if process_error != QProcess.FailedToStart:
+            return
+        self._set_collection_busy(False)
+        message = self.settings_collection_process.errorString() or "수집기 프로세스를 시작하지 못했습니다."
+        self._record_collection_error(source, -1, message)
+        self._refresh_settings_data_status()
+        self.settings_data_status.setText(
+            "수집기 실행 실패 · 상세 설정의 오류 확인 버튼에서 내용을 확인하거나 복사하세요."
+        )
 
     def _full_data_refresh_finished(self, exit_code: int, exit_status) -> None:
         """이전 연결 지점과의 호환용."""
