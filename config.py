@@ -8,7 +8,7 @@ from services.data_location import resolve_data_root
 
 APP_NAME = "똑딱이 생산3팀"
 APP_DISPLAY_NAME = "똑딱이 - 생산3팀 전용"
-APP_VERSION = "0.1.13"
+APP_VERSION = "0.1.14"
 APP_USER_MODEL_ID = "Ddokddak.ProductionTeam3.Source"
 DEFAULT_FACTORY = "S관"
 

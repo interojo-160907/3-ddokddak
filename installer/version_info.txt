@@ -16,11 +16,11 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', '생산기획팀 RD'),
           StringStruct('FileDescription', '생산3팀 납기 통합조회'),
-        StringStruct('FileVersion', '0.1.13'),
+        StringStruct('FileVersion', '0.1.14'),
           StringStruct('InternalName', 'gui_app_pyside6'),
           StringStruct('OriginalFilename', 'gui_app_pyside6.exe'),
           StringStruct('ProductName', '똑딱이 생산3팀 납기 통합조회'),
-        StringStruct('ProductVersion', '0.1.13')
+        StringStruct('ProductVersion', '0.1.14')
         ]
       )
     ]),

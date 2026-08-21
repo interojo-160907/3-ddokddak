@@ -175,6 +175,15 @@ class ProcessStatusService:
                 ).fetchall()
                 if row["item_id"]
             }
+            try:
+                order_remarks = {
+                    str(row["order_no"] or "").strip(): str(row["remark"] or "").strip()
+                    for row in connection.execute(
+                        "SELECT order_no,remark FROM order_remark WHERE TRIM(COALESCE(remark,''))<>''"
+                    ).fetchall()
+                }
+            except sqlite3.Error:
+                order_remarks = {}
         finally:
             connection.close()
 
@@ -194,6 +203,7 @@ class ProcessStatusService:
                     "POWER": specs["POWER"], "CP": specs["CP"], "AXIS": specs["AXIS"],
                     "ADD": specs["ADD"], "납기일": key[5],
                     "진행현황": _channel(key[7], key[8]), "수주수량": float(item["demand_qty"] or 0),
+                    "비고": order_remarks.get(str(key[0]), ""),
                     "_POWER_NUM": specs["_POWER_NUM"], "_CP_NUM": specs["_CP_NUM"],
                     "_AXIS_NUM": specs["_AXIS_NUM"], "_ADD_NUM": specs["_ADD_NUM"],
                     "_제품정렬": key[9] or key[3],

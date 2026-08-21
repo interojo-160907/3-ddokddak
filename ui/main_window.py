@@ -2128,14 +2128,18 @@ class MainWindow(QMainWindow):
                 detail = QLabel(f"{row['classification']} · 생산 필요수량 {row['risk_qty']:,.0f} pcs")
                 detail.setObjectName("RiskDetail")
                 item_layout.addWidget(detail)
-                tooltip = (
+                remark = str(row.get("remark") or "").strip()
+                tooltip_lines = [
                     f"수주번호  {row['order_no']}\n"
                     f"이니셜  {row['initial'] or '-'} · 구분  {row.get('channel') or '-'}\n"
                     f"신규분류요약  {row['classification'] or '-'}\n"
                     f"납기일  {row['due']} · {row['due_label']}\n"
-                    f"생산 필요수량  {float(row['risk_qty'] or 0) / 1_000:,.1f} kpcs\n"
-                    "좌클릭: 수주 상세 · 우클릭: 실행할 기능 선택"
-                )
+                    f"생산 필요수량  {float(row['risk_qty'] or 0) / 1_000:,.1f} kpcs"
+                ]
+                if remark:
+                    tooltip_lines.append(f"\n비고  {remark}")
+                tooltip_lines.append("\n좌클릭: 수주 상세 · 우클릭: 실행할 기능 선택")
+                tooltip = "".join(tooltip_lines)
                 for tooltip_widget in (item, badge, channel, order, due, detail):
                     tooltip_widget.setToolTip(tooltip)
                     if tooltip_widget is not item:
@@ -2189,6 +2193,10 @@ class MainWindow(QMainWindow):
         """)
         heading = menu.addAction(f"{initial}  ·  {order_no}")
         heading.setEnabled(False)
+        remark = str(risk_row.get("remark") or "").strip()
+        if remark:
+            remark_heading = menu.addAction(f"비고  ·  {remark}")
+            remark_heading.setEnabled(False)
         menu.addSeparator()
         detail_action = menu.addAction(
             qta.icon("fa6s.file-lines", color="#52677E"),
@@ -2273,6 +2281,14 @@ class MainWindow(QMainWindow):
         self.order_detail_summary.setObjectName("OrderDetailSummary")
         self.order_detail_summary.setWordWrap(True)
         panel_layout.addWidget(self.order_detail_summary)
+        self.order_detail_remark = QLabel()
+        self.order_detail_remark.setWordWrap(True)
+        self.order_detail_remark.setVisible(False)
+        self.order_detail_remark.setStyleSheet(
+            "QLabel { color: #8A4B08; background: #FFF7E6; border: 1px solid #F4CF8D; "
+            "border-radius: 8px; padding: 8px 10px; font-weight: 700; }"
+        )
+        panel_layout.addWidget(self.order_detail_remark)
         info_card = QFrame()
         info_card.setObjectName("OrderDetailInfoCard")
         info_grid = QGridLayout(info_card)
@@ -2334,6 +2350,7 @@ class MainWindow(QMainWindow):
         if self.dashboard_right_stack.currentWidget() is not self.order_detail_panel:
             self.order_detail_heading.setText(f"{order_no} · 수주 정보 확인 중")
             self.order_detail_summary.setText("수주 상세 정보를 불러오고 있습니다.")
+            self.order_detail_remark.setVisible(False)
             for value in self.order_detail_info_values.values():
                 value.setText("-")
             self._clear_layout_widgets(self.order_item_layout)
@@ -2346,12 +2363,16 @@ class MainWindow(QMainWindow):
         if not order:
             self.order_detail_heading.setText(f"{order_no} · 상세 정보 없음")
             self.order_detail_summary.setText("해당 수주의 상세 데이터를 찾지 못했습니다.")
+            self.order_detail_remark.setVisible(False)
             return
         self.order_detail_heading.setText(f"{order_no} · 제품 {int(order.get('item_count') or 0):,}종")
         self.order_detail_summary.setText(
             f"수주수량 {float(order.get('order_qty') or 0):,.0f} pcs · "
             f"생산 필요수량 {float(order.get('remaining_qty') or 0):,.0f} pcs · 포장 제외"
         )
+        remark = str(order.get("remark") or "").strip()
+        self.order_detail_remark.setText(f"비고  {remark}")
+        self.order_detail_remark.setVisible(bool(remark))
         info_values = {
             "due_date": order.get("due_date") or "-",
             "cust_name": order.get("cust_name") or "-",
@@ -3209,7 +3230,10 @@ class MainWindow(QMainWindow):
                 item = QTableWidgetItem(text)
                 if key in numeric:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                if key in {"신규분류요약", "품명", "T코드", "P코드", "Q코드", "R코드"}:
+                if key == "수주번호":
+                    remark = str(row.get("비고") or "").strip()
+                    item.setToolTip(f"{value}\n비고: {remark}" if remark else str(value or ""))
+                elif key in {"신규분류요약", "품명", "T코드", "P코드", "Q코드", "R코드"}:
                     item.setToolTip(str(value or ""))
                 self.process_table.setItem(row_index, column_index, item)
         self._update_progress_column_visibility()

@@ -163,8 +163,12 @@ class RowTableModel(QAbstractTableModel):
             return format_number(value) if isinstance(value, (int, float)) else str(value or "")
         if role == Qt.TextAlignmentRole and isinstance(value, (int, float)):
             return int(Qt.AlignRight | Qt.AlignVCenter)
-        if role == Qt.ToolTipRole and column == "수주번호" and row.get("_수주목록"):
-            return str(row["_수주목록"])
+        if role == Qt.ToolTipRole and column == "수주번호":
+            order_text = str(row.get("_수주목록") or value or "").strip()
+            remark = str(row.get("비고") or "").strip()
+            if remark:
+                return f"{order_text}\n비고: {remark}"
+            return order_text or None
         if role == Qt.ToolTipRole and column in {"신규분류요약", "수주번호", "품명", "T코드", "P코드", "Q코드", "R코드"}:
             return str(value or "") or None
         if role == Qt.UserRole:

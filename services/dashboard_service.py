@@ -44,6 +44,18 @@ def _connect(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _order_remarks(connection: sqlite3.Connection) -> dict[str, str]:
+    try:
+        return {
+            str(row["order_no"] or "").strip(): str(row["remark"] or "").strip()
+            for row in connection.execute(
+                "SELECT order_no,remark FROM order_remark WHERE TRIM(COALESCE(remark,''))<>''"
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return {}
+
+
 class DashboardService:
     def available(self) -> bool:
         return APS_DB.is_file() and PRODUCTION_DB.is_file()
@@ -94,6 +106,7 @@ class DashboardService:
         if not APS_DB.is_file() or not str(order_no).strip():
             return {"order": {}, "items": []}
         with _connect(APS_DB) as connection:
+            remarks = _order_remarks(connection)
             source = connection.execute(
                 "SELECT so_id,MAX(initial) initial,MIN(due_date) due_date,MAX(cust_name) cust_name,"
                 "MAX(dest_country) dest_country,MAX(demand_type) demand_type,MAX(res_site_id) factory "
@@ -154,6 +167,7 @@ class DashboardService:
             for name in PROCESS_ORDER
         }
         order = dict(source)
+        order["remark"] = remarks.get(str(order_no).strip(), "")
         order["item_count"] = len(products)
         order["spec_count"] = len(items)
         order["order_qty"] = sum(float(row["order_qty"] or 0) for row in items)
@@ -168,6 +182,7 @@ class DashboardService:
     @staticmethod
     def _load_aps(result: dict) -> None:
         with _connect(APS_DB) as connection:
+            remarks = _order_remarks(connection)
             for row in connection.execute(
                 "SELECT oper_id,SUM(COALESCE(plan_qty,0)) qty FROM aps_plan "
                 "WHERE oper_id IN ('10','20','45','55','80') GROUP BY oper_id"
@@ -234,6 +249,7 @@ class DashboardService:
                     "channel": channel,
                     "risk_qty": float(row["risk_qty"] or 0),
                     "tone": tone,
+                    "remark": remarks.get(str(row["so_id"] or "").strip(), ""),
                 }
             )
         result["risks"] = risks

@@ -31,6 +31,7 @@ RAW_DIR = DATA_DIR / "raw_api"
 BASE_URL = "https://plan.interojo.net"
 FACTORY = "S관(3공장)"
 PROCESS_CODES = ("10", "20", "45", "55", "80", "85")
+SAFETY_DEMAND_TYPES = {"안전", "안전(국내)", "안전(해외)", "안전재고(국내)", "안전재고(해외)"}
 FIELDS = (
     "plan_date", "oper_id", "res_id", "res_site_id", "demand_id",
     "demand_item_id", "demand_item_name", "item_id", "plan_qty", "due_date",
@@ -77,6 +78,61 @@ def _prune(directory: Path, pattern: str, keep: int) -> None:
             pass
 
 
+def _collect_domestic_order_remarks(
+    rows: list[dict[str, Any]], api_key: str, timeout: int,
+) -> tuple[dict[str, tuple[str, str, str]], str]:
+    """국내 생산요청의 비고를 수주번호 기준으로 보조 수집한다.
+
+    비고 API 장애가 APS 본 수집을 막지 않도록 날짜별 오류는 기록만 하고
+    정상 응답에서 확인된 비고는 계속 저장한다.
+    """
+    orders_by_date: dict[str, set[str]] = {}
+    for row in rows:
+        order_no = str(row.get("so_id") or "").strip()
+        demand_type = str(row.get("demand_type") or "").strip()
+        destination = str(row.get("dest_country") or "").strip()
+        date_token = order_no[1:9]
+        if (
+            not order_no.startswith("R") or len(date_token) != 8 or not date_token.isdigit()
+            or destination or demand_type == "PB" or demand_type in SAFETY_DEMAND_TYPES
+        ):
+            continue
+        request_date = f"{date_token[:4]}-{date_token[4:6]}-{date_token[6:8]}"
+        orders_by_date.setdefault(request_date, set()).add(order_no)
+
+    remarks: dict[str, tuple[str, str, str]] = {}
+    errors: list[str] = []
+    for request_date, target_orders in sorted(orders_by_date.items()):
+        try:
+            payload = _request(
+                "/api/prod-request-domestic",
+                {
+                    "date_from": request_date,
+                    "date_to": request_date,
+                    "limit": 0,
+                    "prompt_context": "똑딱이 생산3팀 국내 생산요청 비고 수집",
+                },
+                api_key,
+                timeout,
+            )
+            if payload.get("truncated"):
+                errors.append(f"{request_date}: 일부 응답")
+                continue
+            source_updated_at = str(payload.get("source_refreshed_at") or "")
+            for item in payload.get("rows") or []:
+                order_no = str(item.get("re_no") or "").strip()
+                remark = str(item.get("remark") or "").strip()
+                if order_no in target_orders and remark:
+                    remarks[order_no] = (
+                        remark,
+                        str(item.get("re_dt") or request_date)[:10],
+                        source_updated_at,
+                    )
+        except Exception as exc:  # 비고 보조 수집은 APS 스냅샷 생성을 중단하지 않는다.
+            errors.append(f"{request_date}: {exc}")
+    return remarks, " | ".join(errors)
+
+
 def _initialize(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -101,6 +157,12 @@ def _initialize(connection: sqlite3.Connection) -> None:
             source_rows INTEGER NOT NULL, stored_rows INTEGER NOT NULL,
             order_count INTEGER NOT NULL, source_refreshed_at TEXT,
             refreshed_at TEXT NOT NULL, raw_snapshot_path TEXT NOT NULL
+        );
+        CREATE TABLE order_remark (
+            order_no TEXT PRIMARY KEY,
+            remark TEXT NOT NULL,
+            request_date TEXT,
+            source_updated_at TEXT
         );
         """
     )
@@ -133,6 +195,8 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
     if not rows:
         raise RuntimeError("S관 공정 진행 데이터가 없습니다.")
 
+    order_remarks, remark_error = _collect_domestic_order_remarks(rows, api_key, timeout)
+
     now = datetime.now().astimezone()
     stamp = now.strftime("%Y%m%d_%H%M%S")
     raw_path = RAW_DIR / f"aps_s_factory_{stamp}.json.gz"
@@ -149,6 +213,10 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
         connection.executemany(
             f"INSERT INTO aps_plan ({','.join(FIELDS)},payload_json) VALUES ({marks})",
             [(*[row.get(field) for field in FIELDS], json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)) for row in rows],
+        )
+        connection.executemany(
+            "INSERT INTO order_remark(order_no,remark,request_date,source_updated_at) VALUES (?,?,?,?)",
+            [(order_no, *values) for order_no, values in sorted(order_remarks.items())],
         )
         order_count = len({str(row.get("so_id") or "").strip() for row in rows if str(row.get("so_id") or "").strip()})
         connection.execute(
@@ -173,6 +241,7 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
         "source_rows": len(source_rows), "stored_rows": len(rows), "order_count": order_count,
         "source_refreshed_at": str(payload.get("source_refreshed_at") or ""),
         "refreshed_at": now.isoformat(timespec="seconds"), "raw_snapshot": str(raw_path),
+        "remark_count": len(order_remarks), "remark_error": remark_error,
     }
     _atomic_json(STATUS_PATH, result)
     return result
