@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -98,16 +99,81 @@ def schedule_install_and_restart(installer_path: Path) -> None:
     restart_argument_text = ", ".join(
         _powershell_quote(argument) for argument in restart_arguments
     )
+    parent_pid = os.getpid()
     script = (
-        "Start-Sleep -Seconds 2\n"
+        "Add-Type -AssemblyName System.Windows.Forms\n"
+        "Add-Type -AssemblyName System.Drawing\n"
+        "$createdNew = $false\n"
+        "$mutex = New-Object System.Threading.Mutex($true, 'Local\\DdokddakProduction3.Update', [ref]$createdNew)\n"
+        "if (-not $createdNew) { exit }\n"
         f"$installer = {_powershell_quote(str(installer_path.resolve()))}\n"
-        "$result = Start-Process -FilePath $installer "
-        "-ArgumentList @('/SILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS') "
+        f"$parentPid = {parent_pid}\n"
+        "$form = New-Object System.Windows.Forms.Form\n"
+        "$form.Text = '똑딱이 업데이트'\n"
+        "$form.Size = New-Object System.Drawing.Size(520,250)\n"
+        "$form.StartPosition = 'CenterScreen'\n"
+        "$form.FormBorderStyle = 'FixedDialog'\n"
+        "$form.MaximizeBox = $false\n"
+        "$form.MinimizeBox = $false\n"
+        "$form.ControlBox = $false\n"
+        "$form.TopMost = $true\n"
+        "$form.BackColor = [System.Drawing.Color]::White\n"
+        "$title = New-Object System.Windows.Forms.Label\n"
+        "$title.Text = '새 버전을 적용하고 있습니다'\n"
+        "$title.Font = New-Object System.Drawing.Font('Malgun Gothic',16,[System.Drawing.FontStyle]::Bold)\n"
+        "$title.ForeColor = [System.Drawing.Color]::FromArgb(16,35,63)\n"
+        "$title.Location = New-Object System.Drawing.Point(34,30)\n"
+        "$title.Size = New-Object System.Drawing.Size(440,36)\n"
+        "$form.Controls.Add($title)\n"
+        "$status = New-Object System.Windows.Forms.Label\n"
+        "$status.Text = '프로그램을 안전하게 종료하는 중입니다.'\n"
+        "$status.Font = New-Object System.Drawing.Font('Malgun Gothic',10)\n"
+        "$status.ForeColor = [System.Drawing.Color]::FromArgb(64,86,109)\n"
+        "$status.Location = New-Object System.Drawing.Point(36,82)\n"
+        "$status.Size = New-Object System.Drawing.Size(430,28)\n"
+        "$form.Controls.Add($status)\n"
+        "$progress = New-Object System.Windows.Forms.ProgressBar\n"
+        "$progress.Location = New-Object System.Drawing.Point(36,124)\n"
+        "$progress.Size = New-Object System.Drawing.Size(430,18)\n"
+        "$progress.Style = 'Marquee'\n"
+        "$progress.MarqueeAnimationSpeed = 22\n"
+        "$form.Controls.Add($progress)\n"
+        "$caption = New-Object System.Windows.Forms.Label\n"
+        "$caption.Text = '창을 닫지 마세요. 완료되면 최신 버전이 자동으로 실행됩니다.'\n"
+        "$caption.Font = New-Object System.Drawing.Font('Malgun Gothic',9)\n"
+        "$caption.ForeColor = [System.Drawing.Color]::FromArgb(10,103,216)\n"
+        "$caption.Location = New-Object System.Drawing.Point(36,159)\n"
+        "$caption.Size = New-Object System.Drawing.Size(440,25)\n"
+        "$form.Controls.Add($caption)\n"
+        "Start-Sleep -Milliseconds 650\n"
+        "$form.Show()\n"
+        "[System.Windows.Forms.Application]::DoEvents()\n"
+        "$deadline = (Get-Date).AddSeconds(30)\n"
+        "while ((Get-Process -Id $parentPid -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {\n"
+        "  [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100\n"
+        "}\n"
+        "$status.Text = '새 버전 설치 중입니다.'\n"
+        "[System.Windows.Forms.Application]::DoEvents()\n"
+        "$result = Start-Process -FilePath $installer -WindowStyle Hidden "
+        "-ArgumentList @('/VERYSILENT','/SP-','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/NOCANCEL') "
         "-Wait -PassThru\n"
         "if ($result.ExitCode -eq 0) {\n"
+        "  $progress.Style = 'Continuous'; $progress.Value = 100\n"
+        "  $status.Text = '업데이트가 완료되었습니다.'\n"
+        "  $caption.Text = '최신 버전을 실행합니다.'\n"
+        "  [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 900\n"
+        "  $form.Close()\n"
         f"  Start-Process -FilePath {_powershell_quote(restart_program)}"
         + (f" -ArgumentList @({restart_argument_text})" if restart_arguments else "")
-        + "\n}\n"
+        + "\n} else {\n"
+        "  $progress.Style = 'Continuous'; $progress.Value = 0\n"
+        "  $status.Text = '업데이트를 완료하지 못했습니다.'\n"
+        "  $status.ForeColor = [System.Drawing.Color]::FromArgb(180,35,24)\n"
+        "  $caption.Text = '설치파일을 다시 내려받아 실행해 주세요.'\n"
+        "  [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Seconds 4\n"
+        "  $form.Close()\n"
+        "}\n"
+        "$mutex.ReleaseMutex(); $mutex.Dispose()\n"
     )
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     subprocess.Popen(

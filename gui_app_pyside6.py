@@ -36,6 +36,24 @@ COLLECTOR_MODULES = {
     "refresh_all": "collectors.refresh_all",
 }
 
+_INSTANCE_MUTEX_HANDLE = None
+
+
+def acquire_single_instance() -> bool:
+    global _INSTANCE_MUTEX_HANDLE
+    if sys.platform != "win32":
+        return True
+    handle = ctypes.windll.kernel32.CreateMutexW(
+        None, False, "Local\\DdokddakProduction3.Main"
+    )
+    if not handle:
+        return True
+    if ctypes.windll.kernel32.GetLastError() == 183:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return False
+    _INSTANCE_MUTEX_HANDLE = handle
+    return True
+
 
 def run_collector_mode(arguments: list[str]) -> int:
     collector_name = arguments[0] if arguments else ""
@@ -105,6 +123,8 @@ def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "--collector":
         hide_collector_process_window()
         return run_collector_mode(sys.argv[2:])
+    if not acquire_single_instance():
+        return 0
     ensure_directories()
     configure_windows_identity()
     QApplication.setHighDpiScaleFactorRoundingPolicy(
@@ -160,8 +180,7 @@ def main() -> int:
     app.processEvents()
     splash.set_progress(3, 6, "필수 모듈 백그라운드 활성화")
     app.processEvents()
-    window = MainWindow()
-    window.management_notices = list(gate_result.notices)
+    window = MainWindow(gate_result.notices)
     if not icon.isNull():
         window.setWindowIcon(icon)
 

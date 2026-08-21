@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "0.1.6"
+#define MyAppVersion "0.1.7"
 #define MyAppExeName "gui_app_pyside6.exe"
 #define MySourceDir "..\dist\production3"
 
@@ -87,6 +87,9 @@ begin
   WizardForm.PageNameLabel.Font.Style := [fsBold];
   WizardForm.PageNameLabel.Font.Color := $00D66D0A;
   WizardForm.PageDescriptionLabel.Font.Name := '맑은 고딕';
+  WizardForm.PageDescriptionLabel.AutoSize := False;
+  WizardForm.PageDescriptionLabel.Top := WizardForm.PageNameLabel.Top + WizardForm.PageNameLabel.Height + ScaleY(4);
+  WizardForm.PageDescriptionLabel.Height := ScaleY(30);
   WizardForm.PageDescriptionLabel.Font.Color := $00746B63;
   WizardForm.WelcomeLabel1.Caption := '생산3팀 똑딱이 설치';
   WizardForm.WelcomeLabel1.Font.Name := '맑은 고딕';

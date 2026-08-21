@@ -235,7 +235,7 @@ def show_required_update(
         else:
             dialog.selected_action = "download"
             set_status(f"다운로드 완료 · {path}\n프로그램을 종료합니다.")
-        QTimer.singleShot(700, dialog.accept)
+        QTimer.singleShot(60 if active_action["value"] == "update" else 700, dialog.accept)
 
     def start_download(action: str) -> None:
         target_url = str(update_url or "").strip()

@@ -92,9 +92,10 @@ from services.bom_explorer import BomExplorerService
 from services.collection_schedule import load_schedule, save_schedule
 from services.dashboard_service import DashboardService
 from services.process_status_service import ProcessStatusService, business_sort_key, classification_sort_key
-from services.program_gate import ProgramGate
+from services.program_gate import DEFAULT_UPDATE_URL, ProgramGate
 from ui.bom_page import BomStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
+from ui.notice_ticker import NoticeTicker
 from ui.permission_dialog import show_permission_denied
 from ui.process_overview_page import ProcessOverviewPage
 from ui.update_flow_dialog import show_required_update
@@ -1170,9 +1171,9 @@ class BomFlowBoard(QGraphicsView):
 class MainWindow(QMainWindow):
     PROCESS_KEYS = ("injection", "separation", "hydration", "inspection", "leak")
 
-    def __init__(self) -> None:
+    def __init__(self, management_notices: list[dict[str, Any]] | tuple[dict[str, Any], ...] = ()) -> None:
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} | {APP_DISPLAY_NAME}")
+        self.setWindowTitle("똑딱이 - 생산3팀 전용")
         self.setMinimumSize(1040, 680)
         self.resize(1420, 860)
         self.page_definitions = {page.key: page for page in PAGES}
@@ -1189,11 +1190,14 @@ class MainWindow(QMainWindow):
         self._force_close = False
         self._permission_check_future: Future | None = None
         self._permission_check_manual = False
+        self._update_prompt_active = False
+        self.management_notices = list(management_notices)
         self._permission_check_executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="ddokddak-permission",
         )
         self._build_shell()
+        self.notice_ticker.replace_notices(self.management_notices)
         self.show_page("dashboard")
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
@@ -1417,6 +1421,8 @@ class MainWindow(QMainWindow):
         header_text.addWidget(self.header_title)
         header_text.addWidget(self.header_description)
         header.addLayout(header_text, 1)
+        self.notice_ticker = NoticeTicker(self.global_header)
+        header.addWidget(self.notice_ticker, 2)
 
         self.header_meta = QLabel()
         self.header_meta.setObjectName("HeaderMeta")
@@ -1543,15 +1549,23 @@ class MainWindow(QMainWindow):
             self._force_close = True
             self.close()
             return
+        self.management_notices = list(result.notices)
+        self.notice_ticker.replace_notices(self.management_notices)
         if result.update_required:
+            if self._update_prompt_active:
+                return
             self.permission_check_timer.stop()
-            action = show_required_update(
-                self,
-                APP_VERSION,
-                result.latest_version,
-                result.message or f"최신 버전 {result.latest_version}이 확인되었습니다.",
-                result.update_url,
-            )
+            self._update_prompt_active = True
+            try:
+                action = show_required_update(
+                    self,
+                    APP_VERSION,
+                    result.latest_version,
+                    result.message or f"최신 버전 {result.latest_version}이 확인되었습니다.",
+                    result.update_url,
+                )
+            finally:
+                self._update_prompt_active = False
             if action in {"download", "update"}:
                 self._force_close = True
                 self.close()
@@ -4130,6 +4144,13 @@ class MainWindow(QMainWindow):
         def check_program_update() -> None:
             self._start_runtime_permission_check(manual=True)
 
+        def copy_installer_link() -> None:
+            QApplication.clipboard().setText(DEFAULT_UPDATE_URL)
+            show_app_message(self, "설치 링크 복사", "최신 설치파일 주소를 복사했습니다.", kind="success")
+
+        def download_latest_installer() -> None:
+            QDesktopServices.openUrl(QUrl(DEFAULT_UPDATE_URL))
+
         cards = (
             (
                 "로컬 데이터 저장소",
@@ -4195,6 +4216,42 @@ class MainWindow(QMainWindow):
             card_layout.addLayout(text_layout, 1)
             card_layout.addWidget(button)
             layout.addWidget(card)
+
+        distribution_card = QFrame()
+        distribution_card.setObjectName("SettingsCard")
+        distribution_layout = QHBoxLayout(distribution_card)
+        distribution_layout.setContentsMargins(20, 18, 20, 18)
+        distribution_text = QVBoxLayout()
+        distribution_text.setSpacing(4)
+        distribution_title = QLabel("프로그램 설치파일")
+        distribution_title.setObjectName("CardTitle")
+        distribution_description = QLabel("신규 사용자에게 최신 설치파일 주소를 전달할 수 있습니다. 설치 후 등록되지 않은 PC는 사용 권한을 요청합니다.")
+        distribution_description.setObjectName("CardSub")
+        distribution_value = QLabel(DEFAULT_UPDATE_URL)
+        distribution_value.setObjectName("SettingsValue")
+        distribution_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        distribution_value.setWordWrap(True)
+        distribution_text.addWidget(distribution_title)
+        distribution_text.addWidget(distribution_description)
+        distribution_text.addWidget(distribution_value)
+        distribution_buttons = QHBoxLayout()
+        distribution_buttons.setSpacing(8)
+        copy_button = QPushButton("링크 복사")
+        copy_button.setObjectName("SecondaryButton")
+        copy_button.clicked.connect(copy_installer_link)
+        download_button = QPushButton("설치파일 다운로드")
+        download_button.setObjectName("PrimaryButton")
+        download_button.setStyleSheet(
+            "QPushButton { background:#0878F9; color:white; border:none; border-radius:10px; "
+            "padding:0 18px; min-height:42px; font-weight:700; } "
+            "QPushButton:hover { background:#006BE6; }"
+        )
+        download_button.clicked.connect(download_latest_installer)
+        distribution_buttons.addWidget(copy_button)
+        distribution_buttons.addWidget(download_button)
+        distribution_layout.addLayout(distribution_text, 1)
+        distribution_layout.addLayout(distribution_buttons)
+        layout.addWidget(distribution_card)
         self._refresh_settings_data_status()
         layout.addStretch()
         return self._scroll_page(body)
