@@ -4776,6 +4776,12 @@ class MainWindow(QMainWindow):
             )
 
     def _start_full_data_refresh(self) -> None:
+        if (
+            hasattr(self, "settings_collection_process")
+            and self.settings_collection_process.state() != QProcess.NotRunning
+        ):
+            self._cancel_data_collection()
+            return
         self._start_data_collection("all")
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
@@ -4796,6 +4802,10 @@ class MainWindow(QMainWindow):
             self.aps_monitor_process.kill()
             self.aps_monitor_process.waitForFinished(1_000)
         self._collection_last_attempt[source] = datetime.now()
+        self._collection_active_source = source
+        self._collection_started_at = datetime.now()
+        self._collection_live_output = []
+        self._collection_forced_error_message = ""
         self._set_collection_busy(True, source)
         self.settings_data_status.setText(f"{labels[source]} 수집 중입니다. 프로그램을 종료하지 마세요.")
         process = _background_process(self)
@@ -4806,35 +4816,106 @@ class MainWindow(QMainWindow):
         process.finished.connect(
             lambda exit_code, exit_status, selected=source: self._data_collection_finished(selected, exit_code, exit_status)
         )
+        process.readyReadStandardOutput.connect(self._capture_collection_output)
+        process.readyReadStandardError.connect(self._capture_collection_output)
         process.errorOccurred.connect(
             lambda process_error, selected=source: self._data_collection_process_error(selected, process_error)
         )
         self.settings_collection_process = process
         self.settings_refresh_process = process
+        if not hasattr(self, "collection_elapsed_timer"):
+            self.collection_elapsed_timer = QTimer(self)
+            self.collection_elapsed_timer.timeout.connect(self._update_collection_elapsed)
+        if not hasattr(self, "collection_watchdog_timer"):
+            self.collection_watchdog_timer = QTimer(self)
+            self.collection_watchdog_timer.setSingleShot(True)
+            self.collection_watchdog_timer.timeout.connect(self._collection_watchdog_expired)
+        self.collection_elapsed_timer.start(1_000)
+        self.collection_watchdog_timer.start(360_000 if source == "all" else 300_000)
         process.start()
 
     def _set_collection_busy(self, busy: bool, source: str = "") -> None:
         if hasattr(self, "settings_refresh_button"):
-            self.settings_refresh_button.setEnabled(not busy)
-            self.settings_refresh_button.setText("수집 중…" if busy and source == "all" else "전체 데이터 수집")
+            self.settings_refresh_button.setEnabled(True)
+            self.settings_refresh_button.setText("수집 중단" if busy else "전체 데이터 수집")
+            self.settings_refresh_button.setToolTip(
+                "현재 수집을 중단합니다." if busy else "BOM, APS, 생산실적을 순서대로 수집합니다."
+            )
         for key, controls in getattr(self, "collection_controls", {}).items():
             controls["manual"].setEnabled(not busy)
             controls["manual"].setText("수집 중…" if busy and key == source else "지금 갱신")
 
+    def _capture_collection_output(self) -> None:
+        process = getattr(self, "settings_collection_process", None)
+        if process is None:
+            return
+        stdout = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace").strip()
+        stderr = bytes(process.readAllStandardError()).decode("utf-8", errors="replace").strip()
+        for text in (stdout, stderr):
+            if text:
+                self._collection_live_output.append(text)
+        joined = "\n".join(self._collection_live_output)
+        if len(joined) > 30_000:
+            self._collection_live_output = [joined[-30_000:]]
+
+    def _update_collection_elapsed(self) -> None:
+        process = getattr(self, "settings_collection_process", None)
+        started = getattr(self, "_collection_started_at", None)
+        if process is None or started is None or process.state() == QProcess.NotRunning:
+            return
+        elapsed_seconds = max(0, int((datetime.now() - started).total_seconds()))
+        minutes, seconds = divmod(elapsed_seconds, 60)
+        labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적"}
+        source = getattr(self, "_collection_active_source", "all")
+        suffix = " · API 응답을 기다리는 중" if elapsed_seconds >= 30 else ""
+        self.settings_data_status.setText(
+            f"{labels.get(source, source)} 수집 중 · 경과 {minutes:02d}:{seconds:02d}{suffix}"
+        )
+
+    def _collection_watchdog_expired(self) -> None:
+        process = getattr(self, "settings_collection_process", None)
+        if process is None or process.state() == QProcess.NotRunning:
+            return
+        source = getattr(self, "_collection_active_source", "all")
+        limit_text = "6분" if source == "all" else "5분"
+        self._collection_forced_error_message = (
+            f"수집 제한 시간({limit_text})을 초과하여 자동 중단했습니다.\n"
+            "API 연결은 가능하지만 응답이 지연됐거나 수집기 처리가 정지했을 수 있습니다."
+        )
+        process.kill()
+
+    def _cancel_data_collection(self) -> None:
+        process = getattr(self, "settings_collection_process", None)
+        if process is None or process.state() == QProcess.NotRunning:
+            return
+        self._collection_forced_error_message = "사용자가 진행 중인 데이터 수집을 중단했습니다."
+        self.settings_data_status.setText("수집을 중단하고 오류 내용을 정리하는 중입니다.")
+        process.kill()
+
     def _data_collection_finished(self, source: str, exit_code: int, _exit_status) -> None:
+        if hasattr(self, "collection_elapsed_timer"):
+            self.collection_elapsed_timer.stop()
+        if hasattr(self, "collection_watchdog_timer"):
+            self.collection_watchdog_timer.stop()
+        self._capture_collection_output()
         self._set_collection_busy(False)
-        if exit_code != 0:
-            stderr = bytes(self.settings_collection_process.readAllStandardError()).decode("utf-8", errors="replace").strip()
-            stdout = bytes(self.settings_collection_process.readAllStandardOutput()).decode("utf-8", errors="replace").strip()
-            error = stderr or stdout or self.settings_collection_process.errorString()
+        forced_error = str(getattr(self, "_collection_forced_error_message", "") or "").strip()
+        captured = "\n".join(getattr(self, "_collection_live_output", []))
+        if exit_code != 0 or forced_error:
+            error_parts = [part for part in (forced_error, captured, self.settings_collection_process.errorString()) if part]
+            error = "\n\n".join(error_parts) or "수집기가 종료됐지만 오류 내용을 반환하지 않았습니다."
             self._record_collection_error(source, exit_code, error)
             self._refresh_settings_data_status()
             self.settings_data_status.setText(
                 f"수집 실패 · 상세 설정의 오류 확인 버튼을 눌러 내용을 확인하거나 복사하세요."
             )
+            self._collection_forced_error_message = ""
+            self._collection_live_output = []
             return
         self._clear_collection_errors(source)
         self._refresh_settings_data_status()
+        self._collection_forced_error_message = ""
+        self._collection_live_output = []
         changed = {"bom", "aps", "production"} if source == "all" else {source}
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
@@ -4842,8 +4923,12 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(1_000, self._run_scheduled_collections)
 
     def _data_collection_process_error(self, source: str, process_error) -> None:
-        if process_error != QProcess.FailedToStart:
+        if process_error != QProcess.ProcessError.FailedToStart:
             return
+        if hasattr(self, "collection_elapsed_timer"):
+            self.collection_elapsed_timer.stop()
+        if hasattr(self, "collection_watchdog_timer"):
+            self.collection_watchdog_timer.stop()
         self._set_collection_busy(False)
         message = self.settings_collection_process.errorString() or "수집기 프로세스를 시작하지 못했습니다."
         self._record_collection_error(source, -1, message)
