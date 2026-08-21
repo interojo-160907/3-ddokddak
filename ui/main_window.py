@@ -4806,6 +4806,7 @@ class MainWindow(QMainWindow):
         self._collection_started_at = datetime.now()
         self._collection_live_output = []
         self._collection_forced_error_message = ""
+        self._collection_abort_finalized = False
         self._set_collection_busy(True, source)
         self.settings_data_status.setText(f"{labels[source]} 수집 중입니다. 프로그램을 종료하지 마세요.")
         process = _background_process(self)
@@ -4878,19 +4879,45 @@ class MainWindow(QMainWindow):
             return
         source = getattr(self, "_collection_active_source", "all")
         limit_text = "6분" if source == "all" else "5분"
-        self._collection_forced_error_message = (
+        self._abort_data_collection(
             f"수집 제한 시간({limit_text})을 초과하여 자동 중단했습니다.\n"
             "API 연결은 가능하지만 응답이 지연됐거나 수집기 처리가 정지했을 수 있습니다."
         )
-        process.kill()
 
     def _cancel_data_collection(self) -> None:
         process = getattr(self, "settings_collection_process", None)
         if process is None or process.state() == QProcess.NotRunning:
             return
-        self._collection_forced_error_message = "사용자가 진행 중인 데이터 수집을 중단했습니다."
-        self.settings_data_status.setText("수집을 중단하고 오류 내용을 정리하는 중입니다.")
+        self._abort_data_collection("사용자가 진행 중인 데이터 수집을 중단했습니다.")
+
+    def _abort_data_collection(self, message: str) -> None:
+        process = getattr(self, "settings_collection_process", None)
+        if process is None or process.state() == QProcess.NotRunning:
+            return
+        source = getattr(self, "_collection_active_source", "all")
+        pid = int(process.processId())
+        if hasattr(self, "collection_elapsed_timer"):
+            self.collection_elapsed_timer.stop()
+        if hasattr(self, "collection_watchdog_timer"):
+            self.collection_watchdog_timer.stop()
+        self._capture_collection_output()
+        captured = "\n".join(getattr(self, "_collection_live_output", []))
+        error = "\n\n".join(part for part in (message, captured, process.errorString()) if part)
+        self._collection_forced_error_message = message
+        self._collection_abort_finalized = True
+        self._record_collection_error(source, -2, error or message)
+        self._refresh_settings_data_status()
+        self.settings_data_status.setText(
+            "수집 중단됨 · 상세 설정의 오류 확인 버튼에서 내용을 확인하거나 복사하세요."
+        )
+        self._set_collection_busy(False)
         process.kill()
+        if sys.platform == "win32" and pid > 0:
+            killer = _background_process(self)
+            killer.setProgram("taskkill")
+            killer.setArguments(["/PID", str(pid), "/T", "/F"])
+            self._collection_kill_process = killer
+            killer.start()
 
     def _data_collection_finished(self, source: str, exit_code: int, _exit_status) -> None:
         if hasattr(self, "collection_elapsed_timer"):
@@ -4899,6 +4926,11 @@ class MainWindow(QMainWindow):
             self.collection_watchdog_timer.stop()
         self._capture_collection_output()
         self._set_collection_busy(False)
+        if bool(getattr(self, "_collection_abort_finalized", False)):
+            self._collection_abort_finalized = False
+            self._collection_forced_error_message = ""
+            self._collection_live_output = []
+            return
         forced_error = str(getattr(self, "_collection_forced_error_message", "") or "").strip()
         captured = "\n".join(getattr(self, "_collection_live_output", []))
         if exit_code != 0 or forced_error:
