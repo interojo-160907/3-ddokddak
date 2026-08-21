@@ -93,7 +93,7 @@ def _update_url(value: object) -> str:
 
 
 class ProgramGate:
-    def __init__(self, current_version: str, timeout: int = 8) -> None:
+    def __init__(self, current_version: str, timeout: int = 30) -> None:
         self.current_version = current_version
         self.timeout = timeout
         self.endpoint = resolve_management_api_url()

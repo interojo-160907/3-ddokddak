@@ -110,7 +110,7 @@ def main() -> int:
     splash.set_progress(2, 6, "PC 식별 정보 확인")
     app.processEvents()
     while True:
-        splash.set_progress(3, 6, "사용 권한·공지 확인")
+        splash.set_progress(3, 6, "사용 권한·버전·공지 확인")
         app.processEvents()
         gate_result = gate.check()
         if gate_result.reason != "network":
