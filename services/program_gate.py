@@ -18,6 +18,7 @@ from services.data_location import resolve_data_root, resolve_management_api_url
 PROGRAM_KEY = "생산3공장 똑딱이"
 CACHE_MAX_AGE = timedelta(hours=24)
 STARTUP_PERMISSION_CACHE_AGE = timedelta(hours=24)
+NOTICE_CACHE_MAX_AGE = timedelta(hours=24)
 DEFAULT_UPDATE_URL = (
     "https://github.com/interojo-160907/3-ddokddak/"
     "releases/latest/download/ddokddak-production3-setup.exe"
@@ -99,6 +100,7 @@ class ProgramGate:
         self.timeout = timeout
         self.endpoint = resolve_management_api_url()
         self.cache_path = resolve_data_root() / "settings" / "program_gate_cache.json"
+        self.notice_cache_path = resolve_data_root() / "settings" / "management_notices.json"
 
     def identity(self) -> dict[str, str]:
         return {
@@ -117,7 +119,7 @@ class ProgramGate:
             update_required=False,
             latest_version=str(cached.get("latest_version") or ""),
             update_url=_update_url(cached.get("update_url")),
-            notices=tuple(cached.get("notices") or ()),
+            notices=self._cached_notices(),
             source="startup_cache",
             message="최근 확인된 사용 권한 정상",
         )
@@ -144,7 +146,12 @@ class ProgramGate:
                 }
             )
         try:
-            response = requests.post(self.endpoint, json=payload, timeout=self.timeout)
+            response = requests.post(
+                self.endpoint,
+                json=payload,
+                timeout=(3, self.timeout),
+                headers={"User-Agent": "Ddokddak-Production3-Gate"},
+            )
             response.raise_for_status()
             body = response.json()
             data = body.get("result", body) if isinstance(body, dict) else {}
@@ -174,8 +181,9 @@ class ProgramGate:
             if latest_key and current_key
             else _as_bool(data.get("update_required"))
         )
-        notices_value = data.get("notices") or []
-        notices = tuple(row for row in notices_value if isinstance(row, dict))
+        notices, notices_provided = self._extract_notices(body, data)
+        if not notices_provided:
+            notices = self._cached_notices()
         result = GateResult(
             allowed=allowed,
             update_required=update_required,
@@ -187,7 +195,37 @@ class ProgramGate:
         )
         if result.allowed:
             self._save_cache(result)
+            if notices_provided:
+                self._save_notice_cache(notices)
         return result
+
+    @staticmethod
+    def _notice_rows(value: object) -> tuple[dict[str, Any], ...]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return ()
+        if isinstance(value, dict):
+            value = value.get("rows", value.get("items", value.get("data", ())))
+        if not isinstance(value, (list, tuple)):
+            return ()
+        return tuple(row for row in value if isinstance(row, dict))
+
+    @classmethod
+    def _extract_notices(
+        cls,
+        body: object,
+        data: dict[str, Any],
+    ) -> tuple[tuple[dict[str, Any], ...], bool]:
+        aliases = ("notices", "notice_list", "noticeList", "announcements")
+        for container in (data, body):
+            if not isinstance(container, dict):
+                continue
+            for key in aliases:
+                if key in container:
+                    return cls._notice_rows(container.get(key)), True
+        return (), False
 
     def set_connection(self, connected: bool) -> bool:
         if not self.endpoint:
@@ -228,6 +266,36 @@ class ProgramGate:
             "notices": tuple(payload.get("notices") or ()),
             "reason": "",
         }
+
+    def _cached_notices(self) -> tuple[dict[str, Any], ...]:
+        for path in (self.notice_cache_path, self.cache_path):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                checked_at = datetime.fromisoformat(str(payload.get("checked_at") or ""))
+            except (OSError, ValueError, TypeError):
+                continue
+            if datetime.now().astimezone() - checked_at.astimezone() > NOTICE_CACHE_MAX_AGE:
+                continue
+            notices = self._notice_rows(payload.get("notices"))
+            if notices or "notices" in payload:
+                return notices
+        return ()
+
+    def _save_notice_cache(self, notices: tuple[dict[str, Any], ...]) -> None:
+        self.notice_cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.notice_cache_path.with_suffix(".tmp")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "notices": list(notices),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        temporary.replace(self.notice_cache_path)
 
     def _save_cache(self, result: GateResult) -> None:
         self.cache_path.parent.mkdir(parents=True, exist_ok=True)

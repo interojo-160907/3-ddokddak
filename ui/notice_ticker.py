@@ -76,9 +76,9 @@ class NoticeTicker(QWidget):
         super().__init__(parent)
         self.setObjectName("NoticeTicker")
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFixedHeight(34)
+        self.setFixedHeight(36)
         self.setMinimumWidth(300)
-        self.setMaximumWidth(760)
+        self.setMaximumWidth(820)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setVisible(False)
         self._font = QFont("Malgun Gothic", 10)
@@ -91,6 +91,7 @@ class NoticeTicker(QWidget):
         self._next_y = float(self.height())
         self._content_x: float | None = None
         self._seen_slots: set[tuple[str, str]] = set()
+        self._last_slot = ""
 
         self._clock = QTimer(self)
         self._clock.setInterval(1_000)
@@ -120,7 +121,7 @@ class NoticeTicker(QWidget):
                 continue
             program = str(_row_value(row, "프로그램", "program") or "").strip()
             category = _category(_row_value(row, "구분", "category", "type"))
-            text = str(_row_value(row, "공지내용", "내용", "content", "message") or "").strip()
+            text = str(_row_value(row, "공지내용", "내용", "content", "text", "message") or "").strip()
             enabled_raw = _row_value(row, "사용여부", "enabled", "active", "use")
             period_raw = _row_value(row, "주기(min)", "주기", "period_minutes", "period", "interval")
             if not all((program, category, text, str(enabled_raw).strip(), str(period_raw).strip())):
@@ -178,6 +179,9 @@ class NoticeTicker(QWidget):
     def _schedule_tick(self) -> None:
         now = datetime.now()
         slot = now.strftime("%Y%m%d%H%M")
+        if slot != self._last_slot:
+            self._last_slot = slot
+            self._seen_slots.clear()
         due: list[NoticeItem] = []
         for item in self._notices:
             marker = (item.key, slot)
@@ -195,7 +199,7 @@ class NoticeTicker(QWidget):
                     self._queue.append(item)
                     queued_keys.add(item.key)
             self._queue.sort(key=lambda item: (self.PRIORITY[item.category], item.row_order))
-        if self._current is None and not self._vertical.state():
+        if self._current is None and self._vertical.state() == QVariantAnimation.State.Stopped:
             self._show_next()
 
     def _show_next(self) -> None:
@@ -231,7 +235,9 @@ class NoticeTicker(QWidget):
             return
         start_x = float(self.width() - 14)
         end_x = float(-content_width - 14)
-        duration = max(8_000, min(36_000, int((start_x - end_x) / 48 * 1_000)))
+        # About 42 px/s is calm enough for a shared production display while
+        # still clearing long messages in a reasonable time.
+        duration = max(9_000, min(42_000, int((start_x - end_x) / 42 * 1_000)))
         self._content_x = start_x
         self._marquee.setDuration(duration)
         self._marquee.setStartValue(start_x)

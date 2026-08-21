@@ -1237,7 +1237,7 @@ class MainWindow(QMainWindow):
         self.notice_check_timer.setInterval(15_000)
         self.notice_check_timer.timeout.connect(self._start_notice_check)
         self.notice_check_timer.start()
-        QTimer.singleShot(12_000, self._start_notice_check)
+        QTimer.singleShot(18_000, self._start_notice_check)
         self.api_health_timer = QTimer(self)
         self.api_health_timer.setInterval(60_000)
         self.api_health_timer.timeout.connect(self._start_api_health_check)
@@ -1511,6 +1511,8 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _start_notice_check(self) -> None:
+        if self._permission_check_future is not None and not self._permission_check_future.done():
+            return
         if self._notice_check_future is not None and not self._notice_check_future.done():
             return
         gate = ProgramGate(APP_VERSION, timeout=5)

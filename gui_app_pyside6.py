@@ -16,7 +16,6 @@ from config import (
     APP_DISPLAY_NAME,
     APP_USER_MODEL_ID,
     ASSET_DIR,
-    DATA_CENTER_DIR,
     STYLE_DIR,
     ensure_directories,
 )
@@ -109,16 +108,6 @@ def hide_collector_process_window() -> None:
         pass
 
 
-def collection_status_text() -> str:
-    sources = (
-        DATA_CENTER_DIR / "bom",
-        DATA_CENTER_DIR / "process-status",
-        DATA_CENTER_DIR / "production-performance",
-    )
-    ready = sum(1 for path in sources if path.exists())
-    return f"API 수집 상태 확인 · {ready}/{len(sources)} 준비"
-
-
 def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "--collector":
         hide_collector_process_window()
@@ -141,16 +130,18 @@ def main() -> int:
         app.setWindowIcon(icon)
 
     load_styles(app)
-    splash = StartupSplash(ASSET_DIR / "ddokddak_mascot.png", module_count=6)
+    # The bridge is intentionally permission-only. Collection, cleanup,
+    # notices and update checks start after the main window is visible.
+    splash = StartupSplash(ASSET_DIR / "ddokddak_mascot.png", module_count=1)
     splash.show_centered()
-    splash.set_progress(1, 6, "사용 권한 확인")
+    splash.set_progress(0, 1, "사용 권한 확인")
     app.processEvents()
 
     gate = ProgramGate(APP_VERSION)
     identity = gate.identity()
     gate_result = gate.cached_permission()
     while gate_result is None:
-        splash.set_progress(1, 6, "관리 서버에서 사용 권한 확인")
+        splash.set_progress(0, 1, "관리 서버에서 사용 권한 확인")
         app.processEvents()
         gate_result = gate.check()
         if gate_result.reason != "network":
@@ -176,9 +167,7 @@ def main() -> int:
         splash.close()
         return 3
 
-    splash.set_progress(2, 6, collection_status_text())
-    app.processEvents()
-    splash.set_progress(3, 6, "필수 모듈 백그라운드 활성화")
+    splash.set_progress(1, 1, "사용 권한 확인 완료")
     app.processEvents()
     window = MainWindow(gate_result.notices)
     if not icon.isNull():
@@ -188,12 +177,6 @@ def main() -> int:
     frame = window.frameGeometry()
     frame.moveCenter(screen.center())
     window.move(frame.topLeft())
-    splash.set_progress(4, 6, "업무 화면 구성")
-    app.processEvents()
-    splash.set_progress(5, 6, "백그라운드 점검 예약")
-    app.processEvents()
-    splash.set_progress(6, 6, "준비 완료")
-    app.processEvents()
     splash.finish(window)
     return app.exec()
 
