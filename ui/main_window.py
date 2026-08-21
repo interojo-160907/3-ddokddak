@@ -84,7 +84,9 @@ def _background_process(parent: QWidget) -> QProcess:
     process = QProcess(parent)
     process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
     if sys.platform == "win32":
-        process.setCreateProcessArgumentsModifier(_hide_windows_process_window)
+        modifier_setter = getattr(process, "setCreateProcessArgumentsModifier", None)
+        if callable(modifier_setter):
+            modifier_setter(_hide_windows_process_window)
     return process
 
 
@@ -4803,17 +4805,28 @@ class MainWindow(QMainWindow):
             self.aps_monitor_process.waitForFinished(1_000)
         self._collection_last_attempt[source] = datetime.now()
         self._collection_active_source = source
-        self._collection_started_at = datetime.now()
+        self._collection_started_at = None
         self._collection_live_output = []
         self._collection_forced_error_message = ""
         self._collection_abort_finalized = False
-        self._set_collection_busy(True, source)
-        self.settings_data_status.setText(f"{labels[source]} 수집 중입니다. 프로그램을 종료하지 마세요.")
-        process = _background_process(self)
+        try:
+            process = _background_process(self)
+        except Exception as exc:
+            error = f"수집 프로세스 준비 실패: {type(exc).__name__}: {exc}"
+            self._record_collection_error(source, -1, error)
+            self._set_collection_busy(False)
+            self._refresh_settings_data_status()
+            self.settings_data_status.setText(
+                "수집기 준비 실패 · 상세 설정의 오류 확인 버튼에서 내용을 확인하거나 복사하세요."
+            )
+            return
         process.setWorkingDirectory(str(ROOT_DIR))
         program, arguments = _collector_process_command(scripts[source])
         process.setProgram(program)
         process.setArguments(arguments)
+        process.started.connect(
+            lambda selected=source: self._data_collection_started(selected)
+        )
         process.finished.connect(
             lambda exit_code, exit_status, selected=source: self._data_collection_finished(selected, exit_code, exit_status)
         )
@@ -4831,9 +4844,26 @@ class MainWindow(QMainWindow):
             self.collection_watchdog_timer = QTimer(self)
             self.collection_watchdog_timer.setSingleShot(True)
             self.collection_watchdog_timer.timeout.connect(self._collection_watchdog_expired)
+        try:
+            process.start()
+        except Exception as exc:
+            error = f"수집 프로세스 실행 실패: {type(exc).__name__}: {exc}"
+            self._record_collection_error(source, -1, error)
+            self._set_collection_busy(False)
+            self._refresh_settings_data_status()
+            self.settings_data_status.setText(
+                "수집기 실행 실패 · 상세 설정의 오류 확인 버튼에서 내용을 확인하거나 복사하세요."
+            )
+
+    def _data_collection_started(self, source: str) -> None:
+        labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적"}
+        self._collection_started_at = datetime.now()
+        self._set_collection_busy(True, source)
+        self.settings_data_status.setText(
+            f"{labels.get(source, source)} 수집 중입니다. 프로그램을 종료하지 마세요."
+        )
         self.collection_elapsed_timer.start(1_000)
         self.collection_watchdog_timer.start(360_000 if source == "all" else 300_000)
-        process.start()
 
     def _set_collection_busy(self, busy: bool, source: str = "") -> None:
         if hasattr(self, "settings_refresh_button"):
