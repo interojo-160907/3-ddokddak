@@ -17,6 +17,7 @@ from services.data_location import resolve_data_root, resolve_management_api_url
 
 PROGRAM_KEY = "생산3공장 똑딱이"
 CACHE_MAX_AGE = timedelta(hours=24)
+STARTUP_PERMISSION_CACHE_AGE = timedelta(hours=24)
 DEFAULT_UPDATE_URL = (
     "https://github.com/interojo-160907/3-ddokddak/"
     "releases/latest/download/ddokddak-production3-setup.exe"
@@ -106,6 +107,21 @@ class ProgramGate:
             "pc_id": pc_identifier(),
         }
 
+    def cached_permission(self) -> GateResult | None:
+        """Use the last approved identity so startup never waits on version data."""
+        cached = self._cached_result(max_age=STARTUP_PERMISSION_CACHE_AGE)
+        if cached is None or not bool(cached.get("allowed")):
+            return None
+        return GateResult(
+            allowed=True,
+            update_required=False,
+            latest_version=str(cached.get("latest_version") or ""),
+            update_url=_update_url(cached.get("update_url")),
+            notices=tuple(cached.get("notices") or ()),
+            source="startup_cache",
+            message="최근 확인된 사용 권한 정상",
+        )
+
     def check(self) -> GateResult:
         if not self.endpoint:
             return GateResult(
@@ -160,13 +176,17 @@ class ProgramGate:
             self._save_cache(result)
         return result
 
-    def _cached_result(self) -> dict[str, Any] | None:
+    def _cached_result(
+        self,
+        *,
+        max_age: timedelta = CACHE_MAX_AGE,
+    ) -> dict[str, Any] | None:
         try:
             payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
             checked_at = datetime.fromisoformat(str(payload.get("checked_at") or ""))
         except (OSError, ValueError, TypeError):
             return None
-        if datetime.now().astimezone() - checked_at.astimezone() > CACHE_MAX_AGE:
+        if datetime.now().astimezone() - checked_at.astimezone() > max_age:
             return None
         return {
             "allowed": bool(payload.get("allowed")),

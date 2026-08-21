@@ -82,6 +82,7 @@ def _hide_windows_process_window(arguments) -> None:
 
 def _background_process(parent: QWidget) -> QProcess:
     process = QProcess(parent)
+    process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
     if sys.platform == "win32":
         process.setCreateProcessArgumentsModifier(_hide_windows_process_window)
     return process
@@ -1214,6 +1215,7 @@ class MainWindow(QMainWindow):
         self.permission_check_timer.setInterval(20 * 60 * 1_000)
         self.permission_check_timer.timeout.connect(self._start_runtime_permission_check)
         self.permission_check_timer.start()
+        QTimer.singleShot(3_000, self._start_runtime_permission_check)
         self._apply_collection_timers(run_initial=True)
         QTimer.singleShot(5_000, self._run_scheduled_collections)
         QTimer.singleShot(20_000, lambda: self._start_data_cleanup(scheduled=True))

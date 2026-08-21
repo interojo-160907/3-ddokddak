@@ -25,7 +25,6 @@ from ui.main_window import APP_VERSION, MainWindow
 from ui.message_dialog import ask_app_confirmation
 from ui.permission_dialog import show_permission_denied
 from ui.startup_splash import StartupSplash
-from ui.update_flow_dialog import show_required_update
 
 
 COLLECTOR_MODULES = {
@@ -81,8 +80,30 @@ def configure_windows_identity() -> None:
         pass
 
 
+def hide_collector_process_window() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        console = ctypes.windll.kernel32.GetConsoleWindow()
+        if console:
+            ctypes.windll.user32.ShowWindow(console, 0)
+    except (AttributeError, OSError):
+        pass
+
+
+def collection_status_text() -> str:
+    sources = (
+        DATA_CENTER_DIR / "bom",
+        DATA_CENTER_DIR / "process-status",
+        DATA_CENTER_DIR / "production-performance",
+    )
+    ready = sum(1 for path in sources if path.exists())
+    return f"API 수집 상태 확인 · {ready}/{len(sources)} 준비"
+
+
 def main() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "--collector":
+        hide_collector_process_window()
         return run_collector_mode(sys.argv[2:])
     ensure_directories()
     configure_windows_identity()
@@ -102,15 +123,14 @@ def main() -> int:
     load_styles(app)
     splash = StartupSplash(ASSET_DIR / "ddokddak_mascot.png", module_count=6)
     splash.show_centered()
-    splash.set_progress(1, 6, f"데이터 저장소 확인 · {DATA_CENTER_DIR}")
+    splash.set_progress(1, 6, "사용 권한 확인")
     app.processEvents()
 
     gate = ProgramGate(APP_VERSION)
     identity = gate.identity()
-    splash.set_progress(2, 6, "PC 식별 정보 확인")
-    app.processEvents()
-    while True:
-        splash.set_progress(3, 6, "사용 권한·버전·공지 확인")
+    gate_result = gate.cached_permission()
+    while gate_result is None:
+        splash.set_progress(1, 6, "관리 서버에서 사용 권한 확인")
         app.processEvents()
         gate_result = gate.check()
         if gate_result.reason != "network":
@@ -135,23 +155,10 @@ def main() -> int:
         )
         splash.close()
         return 3
-    if gate_result.update_required:
-        message = gate_result.message or (
-            f"최신 버전 {gate_result.latest_version} 업데이트가 필요합니다."
-        )
-        show_required_update(
-            splash,
-            APP_VERSION,
-            gate_result.latest_version,
-            message,
-            gate_result.update_url,
-        )
-        splash.close()
-        return 4
 
-    splash.set_progress(4, 6, gate_result.message or "권한 및 버전 확인 완료")
+    splash.set_progress(2, 6, collection_status_text())
     app.processEvents()
-    splash.set_progress(5, 6, "업무 화면 구성")
+    splash.set_progress(3, 6, "필수 모듈 백그라운드 활성화")
     app.processEvents()
     window = MainWindow()
     window.management_notices = list(gate_result.notices)
@@ -162,6 +169,10 @@ def main() -> int:
     frame = window.frameGeometry()
     frame.moveCenter(screen.center())
     window.move(frame.topLeft())
+    splash.set_progress(4, 6, "업무 화면 구성")
+    app.processEvents()
+    splash.set_progress(5, 6, "백그라운드 점검 예약")
+    app.processEvents()
     splash.set_progress(6, 6, "준비 완료")
     app.processEvents()
     splash.finish(window)
