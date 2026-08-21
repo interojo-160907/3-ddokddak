@@ -96,6 +96,7 @@ from ui.bom_page import BomStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
 from ui.permission_dialog import show_permission_denied
 from ui.process_overview_page import ProcessOverviewPage
+from ui.update_flow_dialog import show_required_update
 
 
 @dataclass(frozen=True)
@@ -1186,6 +1187,7 @@ class MainWindow(QMainWindow):
         self._current_page = "dashboard"
         self._force_close = False
         self._permission_check_future: Future | None = None
+        self._permission_check_manual = False
         self._permission_check_executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="ddokddak-permission",
@@ -1477,9 +1479,19 @@ class MainWindow(QMainWindow):
             self.permission_check_timer.stop()
         self._permission_check_executor.shutdown(wait=False, cancel_futures=True)
 
-    def _start_runtime_permission_check(self) -> None:
+    def _start_runtime_permission_check(self, manual: bool = False) -> None:
         if self._permission_check_future is not None and not self._permission_check_future.done():
+            if manual:
+                show_app_message(
+                    self,
+                    "업데이트 확인",
+                    "권한과 최신 버전을 이미 확인하고 있습니다.",
+                )
             return
+        self._permission_check_manual = manual
+        if manual and hasattr(self, "settings_update_button"):
+            self.settings_update_button.setEnabled(False)
+            self.settings_update_button.setText("확인 중…")
         self._permission_check_future = self._permission_check_executor.submit(
             ProgramGate(APP_VERSION).check
         )
@@ -1493,21 +1505,63 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(200, self._finish_runtime_permission_check)
             return
         self._permission_check_future = None
+        manual = self._permission_check_manual
+        self._permission_check_manual = False
+        if hasattr(self, "settings_update_button"):
+            self.settings_update_button.setEnabled(True)
+            self.settings_update_button.setText("업데이트 확인")
         try:
             result = future.result()
-        except Exception:
+        except Exception as exc:
+            if manual:
+                show_app_message(
+                    self,
+                    "업데이트 확인 실패",
+                    f"권한 및 버전 확인 중 오류가 발생했습니다.\n\n{exc}",
+                    kind="warning",
+                )
             return
-        if result.allowed or result.reason == "network":
+        if result.reason == "network":
+            if manual:
+                show_app_message(
+                    self,
+                    "업데이트 확인 실패",
+                    result.message or "관리 서버에 연결하지 못했습니다.",
+                    kind="warning",
+                )
             return
-        self.permission_check_timer.stop()
-        gate = ProgramGate(APP_VERSION)
-        show_permission_denied(
-            self,
-            gate.identity()["pc_id"],
-            result.message or "이 PC의 프로그램 사용 권한이 중지되었습니다.",
-        )
-        self._force_close = True
-        self.close()
+        if not result.allowed:
+            self.permission_check_timer.stop()
+            gate = ProgramGate(APP_VERSION)
+            show_permission_denied(
+                self,
+                gate.identity()["pc_id"],
+                result.message or "이 PC의 프로그램 사용 권한이 중지되었습니다.",
+            )
+            self._force_close = True
+            self.close()
+            return
+        if result.update_required:
+            self.permission_check_timer.stop()
+            action = show_required_update(
+                self,
+                APP_VERSION,
+                result.latest_version,
+                result.message or f"최신 버전 {result.latest_version}이 확인되었습니다.",
+                result.update_url,
+            )
+            if action in {"download", "update"}:
+                self._force_close = True
+                self.close()
+            return
+        if manual:
+            latest = result.latest_version or APP_VERSION
+            show_app_message(
+                self,
+                "업데이트 확인",
+                f"현재 최신 버전을 사용하고 있습니다.\n\n현재 버전 v{APP_VERSION.lstrip('vV')}\n관리 기준 v{latest.lstrip('vV')}",
+                kind="success",
+            )
 
     def _add_page(self, key: str, page: QWidget) -> None:
         self.page_indexes[key] = self.stack.addWidget(page)
@@ -4071,6 +4125,9 @@ class MainWindow(QMainWindow):
                 result.message or "등록되지 않았거나 사용이 중지된 PC입니다.",
             )
 
+        def check_program_update() -> None:
+            self._start_runtime_permission_check(manual=True)
+
         cards = (
             (
                 "로컬 데이터 저장소",
@@ -4102,7 +4159,7 @@ class MainWindow(QMainWindow):
                 "새 버전이 있으면 알림을 표시하고 설치파일을 내려받습니다.",
                 f"현재 버전 {APP_VERSION}",
                 "업데이트 확인",
-                None,
+                check_program_update,
             ),
         )
         for index, (title, description, value, action, callback) in enumerate(cards):
@@ -4131,6 +4188,8 @@ class MainWindow(QMainWindow):
             button.setEnabled(callback is not None)
             if callback is not None:
                 button.clicked.connect(callback)
+            if title == "프로그램 업데이트":
+                self.settings_update_button = button
             card_layout.addLayout(text_layout, 1)
             card_layout.addWidget(button)
             layout.addWidget(card)

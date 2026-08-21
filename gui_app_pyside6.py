@@ -25,7 +25,7 @@ from ui.main_window import APP_VERSION, MainWindow
 from ui.message_dialog import ask_app_confirmation
 from ui.permission_dialog import show_permission_denied
 from ui.startup_splash import StartupSplash
-from ui.update_dialog import show_required_update
+from ui.update_flow_dialog import show_required_update
 
 
 COLLECTOR_MODULES = {

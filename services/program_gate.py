@@ -17,6 +17,10 @@ from services.data_location import resolve_data_root, resolve_management_api_url
 
 PROGRAM_KEY = "생산3공장 똑딱이"
 CACHE_MAX_AGE = timedelta(hours=24)
+DEFAULT_UPDATE_URL = (
+    "https://github.com/interojo-160907/3-ddokddak/"
+    "releases/latest/download/ddokddak-production3-setup.exe"
+)
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,11 @@ def _as_bool(value: object) -> bool:
     return str(value or "").strip().upper() in {"1", "Y", "YES", "TRUE", "ON"}
 
 
+def _update_url(value: object) -> str:
+    target = str(value or "").strip()
+    return target if target.lower().startswith(("https://", "http://")) else DEFAULT_UPDATE_URL
+
+
 class ProgramGate:
     def __init__(self, current_version: str, timeout: int = 8) -> None:
         self.current_version = current_version
@@ -143,7 +152,7 @@ class ProgramGate:
             update_required=update_required,
             latest_version=latest_version,
             message=str(data.get("message") or "권한 및 버전 확인 완료"),
-            update_url=str(data.get("update_url") or data.get("installer_url") or ""),
+            update_url=_update_url(data.get("update_url") or data.get("installer_url")),
             notices=notices,
             reason="denied" if not allowed else "",
         )
@@ -163,7 +172,7 @@ class ProgramGate:
             "allowed": bool(payload.get("allowed")),
             "update_required": bool(payload.get("update_required")),
             "latest_version": str(payload.get("latest_version") or ""),
-            "update_url": str(payload.get("update_url") or ""),
+            "update_url": _update_url(payload.get("update_url")),
             "notices": tuple(payload.get("notices") or ()),
             "reason": "",
         }
