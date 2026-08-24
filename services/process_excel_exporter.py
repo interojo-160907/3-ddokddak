@@ -33,6 +33,12 @@ HIDDEN_CODE_ORDER = {
     "Q코드": ("R코드", "P코드", "T코드"),
     "P코드": ("Q코드", "R코드", "T코드"),
 }
+CODE_NAME = {
+    "R코드": ("사출명", "품명R"),
+    "Q코드": ("분리명", "품명Q"),
+    "P코드": ("생산명", "품명P"),
+    "T코드": ("판매명", "품명판매"),
+}
 PROCESS_ORDER = ("사출", "분리", "하이드레이션", "접착", "누수규격")
 
 
@@ -59,21 +65,42 @@ def build_process_export_payload(
     if process not in PROCESS_CODE:
         raise ValueError(f"지원하지 않는 공정입니다: {process}")
     dedicated_code = PROCESS_CODE[process]
+    dedicated_name = CODE_NAME[dedicated_code][0]
     hidden_codes = HIDDEN_CODE_ORDER[dedicated_code]
-    stage_columns = PROCESS_ORDER[: PROCESS_ORDER.index(process) + 1]
-    detail_columns = (
-        "신규분류요약", "이니셜", "수주번호", dedicated_code, "품명",
-        "POWER", "CP", "AXIS", "ADD", "납기일", *stage_columns, *hidden_codes,
+    hidden_columns = tuple(
+        column
+        for code in hidden_codes
+        for column in (code, CODE_NAME[code][0])
     )
+    stage_columns = PROCESS_ORDER[: PROCESS_ORDER.index(process) + 1]
+    detail_specs = (
+        ("신규분류요약", "신규분류요약"),
+        ("이니셜", "이니셜"),
+        ("수주번호", "수주번호"),
+        (dedicated_code, dedicated_code),
+        (dedicated_name, "품명"),
+        ("POWER", "POWER"),
+        ("CP", "CP"),
+        ("AXIS", "AXIS"),
+        ("ADD", "ADD"),
+        ("납기일", "납기일"),
+        *((column, column) for column in stage_columns),
+        *(
+            spec
+            for code in hidden_codes
+            for spec in ((code, code), CODE_NAME[code])
+        ),
+    )
+    detail_columns = tuple(header for header, _source in detail_specs)
     detail_values = [
         [
-            _number(row.get(column)) if column in stage_columns else str(row.get(column) or "")
-            for column in detail_columns
+            _number(row.get(source)) if header in stage_columns else str(row.get(source) or "")
+            for header, source in detail_specs
         ]
         for row in detail_rows
     ]
     compact_columns = (
-        "신규분류요약", dedicated_code, "품명", "POWER", "CP", "AXIS", "ADD",
+        "신규분류요약", dedicated_code, dedicated_name, "POWER", "CP", "AXIS", "ADD",
         "최우선 납기일", "수주 건수", "수주번호 목록", f"{process} 부족수량",
     )
     compact_values = []
@@ -106,7 +133,7 @@ def build_process_export_payload(
                 "name": "납기별 상세",
                 "columns": list(detail_columns),
                 "rows": detail_values,
-                "hiddenColumns": list(hidden_codes),
+                "hiddenColumns": list(hidden_columns),
             },
         ],
     }
@@ -135,8 +162,21 @@ def desktop_export_path(process: str) -> Path:
     return desktop / f"{datetime.now():%y%m%d}_{PROCESS_EXPORT_NAME[process]}.xlsx"
 
 
+def _available_output_path(output_path: Path) -> Path:
+    if not output_path.exists():
+        return output_path
+    sequence = 2
+    while True:
+        candidate = output_path.with_name(
+            f"{output_path.stem} ({sequence}){output_path.suffix}"
+        )
+        if not candidate.exists():
+            return candidate
+        sequence += 1
+
+
 def _column_width(header: str) -> float:
-    if "품명" in header:
+    if header == "품명" or header in {name for name, _source in CODE_NAME.values()}:
         return 34
     if "수주번호 목록" in header:
         return 36
@@ -293,7 +333,8 @@ def export_process_workbook(
     output_path: Path | None = None,
     preview_dir: Path | None = None,
 ) -> Path:
-    output = (Path(output_path) if output_path else desktop_export_path(process)).resolve()
+    requested_output = (Path(output_path) if output_path else desktop_export_path(process)).resolve()
+    output = _available_output_path(requested_output)
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = build_process_export_payload(process, detail_rows, compact_rows)
     temporary_output = Path(tempfile.gettempdir()) / f"ddokddak_process_{uuid.uuid4().hex}.xlsx"
