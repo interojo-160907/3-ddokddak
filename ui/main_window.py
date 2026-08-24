@@ -1639,6 +1639,9 @@ class MainWindow(QMainWindow):
             if action in {"download", "update"}:
                 self._force_close = True
                 self.close()
+                app = QApplication.instance()
+                if app is not None:
+                    QTimer.singleShot(0, app.quit)
             return
         if manual:
             latest = result.latest_version or APP_VERSION

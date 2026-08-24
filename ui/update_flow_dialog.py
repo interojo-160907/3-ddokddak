@@ -58,6 +58,24 @@ class RequiredUpdateDialog(QDialog):
         self.selected_action = ""
         self.download_thread: QThread | None = None
         self.download_worker: UpdateDownloadWorker | None = None
+        self.download_progress_handler = None
+        self.download_completed_handler = None
+        self.download_failed_handler = None
+
+    @Slot(int)
+    def handle_download_progress(self, value: int) -> None:
+        if self.download_progress_handler is not None:
+            self.download_progress_handler(value)
+
+    @Slot(str)
+    def handle_download_completed(self, path_text: str) -> None:
+        if self.download_completed_handler is not None:
+            self.download_completed_handler(path_text)
+
+    @Slot(str)
+    def handle_download_failed(self, error: str) -> None:
+        if self.download_failed_handler is not None:
+            self.download_failed_handler(error)
 
     def reject(self) -> None:
         return
@@ -235,7 +253,11 @@ def show_required_update(
         else:
             dialog.selected_action = "download"
             set_status(f"다운로드 완료 · {path}\n프로그램을 종료합니다.")
-        QTimer.singleShot(60 if active_action["value"] == "update" else 700, dialog.accept)
+        QTimer.singleShot(60, dialog.accept)
+
+    dialog.download_progress_handler = update_progress
+    dialog.download_completed_handler = download_completed
+    dialog.download_failed_handler = download_failed
 
     def start_download(action: str) -> None:
         target_url = str(update_url or "").strip()
@@ -257,9 +279,9 @@ def show_required_update(
         worker = UpdateDownloadWorker(target_url, destination)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.progress.connect(update_progress)
-        worker.completed.connect(download_completed)
-        worker.failed.connect(download_failed)
+        worker.progress.connect(dialog.handle_download_progress)
+        worker.completed.connect(dialog.handle_download_completed)
+        worker.failed.connect(dialog.handle_download_failed)
         worker.completed.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)

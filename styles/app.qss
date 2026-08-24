@@ -1842,6 +1842,7 @@ QLabel#StatusChip[status="warning"] {
 }
 
 QTableView#DataTable {
+    color: #24344D;
     background: #FFFFFF;
     alternate-background-color: #FAFAFC;
     border: 1px solid #ECECF0;
@@ -1853,6 +1854,7 @@ QTableView#DataTable {
 }
 
 QTableView#DataTable::item {
+    color: #24344D;
     padding: 5px 7px;
 }
 

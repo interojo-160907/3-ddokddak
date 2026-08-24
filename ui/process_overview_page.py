@@ -227,12 +227,18 @@ class DataTable(Card):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
-        # Windows native style can override QSS selection colors.  Pin the
-        # Control Tower palette so selected rows remain clearly readable.
-        selection_palette = self.table.palette()
-        selection_palette.setColor(QPalette.Highlight, QColor("#E8F2FF"))
-        selection_palette.setColor(QPalette.HighlightedText, QColor("#075CCF"))
-        self.table.setPalette(selection_palette)
+        # Keep the data grid on the application's light theme even when the
+        # Windows/Qt system palette uses dark colors.
+        table_palette = self.table.palette()
+        table_palette.setColor(QPalette.Base, QColor("#FFFFFF"))
+        table_palette.setColor(QPalette.AlternateBase, QColor("#FAFAFC"))
+        table_palette.setColor(QPalette.Text, QColor("#24344D"))
+        table_palette.setColor(QPalette.Window, QColor("#FFFFFF"))
+        table_palette.setColor(QPalette.WindowText, QColor("#24344D"))
+        table_palette.setColor(QPalette.Highlight, QColor("#E8F2FF"))
+        table_palette.setColor(QPalette.HighlightedText, QColor("#075CCF"))
+        self.table.setPalette(table_palette)
+        self.table.viewport().setPalette(table_palette)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.verticalHeader().setDefaultSectionSize(34)
