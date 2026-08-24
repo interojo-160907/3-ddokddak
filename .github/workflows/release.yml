@@ -1,0 +1,72 @@
+name: Build and publish installer
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Build application
+        shell: pwsh
+        run: python -m PyInstaller --noconfirm --clean production3.spec
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path -LiteralPath $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "installer\production3.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prepare release assets
+        shell: pwsh
+        run: |
+          $versioned = Get-ChildItem "installer\output\ddokddak-production3-setup-*.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if ($null -eq $versioned) { throw "Installer output was not created." }
+          $asset = "installer\output\ddokddak-production3-setup.exe"
+          Copy-Item -LiteralPath $versioned.FullName -Destination $asset -Force
+          $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ddokddak-production3-setup.exe" |
+            Set-Content "installer\output\ddokddak-production3-setup.exe.sha256" -Encoding ascii
+
+      - name: Create or update GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $asset = "installer\output\ddokddak-production3-setup.exe"
+          $hash = "$asset.sha256"
+          gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG_NAME $asset $hash --clobber --repo $env:GITHUB_REPOSITORY
+            gh release edit $env:TAG_NAME --latest --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $env:TAG_NAME $asset $hash --generate-notes --latest `
+              --title $env:TAG_NAME --repo $env:GITHUB_REPOSITORY
+          }

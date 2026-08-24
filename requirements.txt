@@ -1,5 +1,7 @@
 PySide6>=6.8
 qtawesome>=1.3
 requests>=2.32
+keyring>=25.0
 pypdf>=5.0
+pypdfium2>=4.30
 XlsxWriter>=3.2
