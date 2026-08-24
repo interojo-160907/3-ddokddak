@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path(SPECPATH)
@@ -14,6 +15,7 @@ a = Analysis(
         (str(project_root / "styles"), "styles"),
     ],
     hiddenimports=[
+        *collect_submodules("xlsxwriter"),
         "collectors.aps_update_monitor",
         "collectors.bom_snapshot_collector",
         "collectors.data_retention_cleanup",

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import json
 import os
-import shutil
-import subprocess
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -37,42 +34,6 @@ HIDDEN_CODE_ORDER = {
     "P코드": ("Q코드", "R코드", "T코드"),
 }
 PROCESS_ORDER = ("사출", "분리", "하이드레이션", "접착", "누수규격")
-
-
-def _runtime_paths() -> tuple[Path, Path]:
-    node = Path(os.getenv(
-        "DDOKDDAK_ARTIFACT_NODE",
-        str(Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe"),
-    ))
-    modules = Path(os.getenv(
-        "DDOKDDAK_ARTIFACT_NODE_MODULES",
-        str(Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules"),
-    ))
-    if not node.is_file() or not modules.is_dir():
-        raise RuntimeError("엑셀 내보내기 구성요소를 찾을 수 없습니다. 프로그램 설치 구성을 확인해 주세요.")
-    return node, modules
-
-
-def _prepare_runtime() -> tuple[Path, Path]:
-    node, modules = _runtime_paths()
-    runtime = Path(tempfile.gettempdir()) / "ddokddak_process_excel_runtime"
-    runtime.mkdir(parents=True, exist_ok=True)
-    builder_source = Path(__file__).resolve().parents[1] / "scripts" / "process_excel_builder.mjs"
-    builder = runtime / builder_source.name
-    shutil.copy2(builder_source, builder)
-    link = runtime / "node_modules"
-    if not link.exists():
-        result = subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(link), str(modules)],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode != 0 and not link.exists():
-            raise RuntimeError(f"엑셀 런타임 준비 실패: {result.stderr or result.stdout}")
-    return node, builder
 
 
 def _number(value: object) -> int | float:
@@ -151,10 +112,177 @@ def build_process_export_payload(
     }
 
 
+def _windows_user_folder(value_name: str, fallback: Path) -> Path:
+    if os.name != "nt":
+        return fallback
+    try:
+        import winreg
+
+        registry_path = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, registry_path) as key:
+            value, _value_type = winreg.QueryValueEx(key, value_name)
+        resolved = os.path.expandvars(str(value or "").strip())
+        if resolved:
+            return Path(resolved).expanduser()
+    except (OSError, ValueError):
+        pass
+    return fallback
+
+
 def desktop_export_path(process: str) -> Path:
-    desktop = Path(os.getenv("USERPROFILE", str(Path.home()))) / "Desktop"
+    desktop = _windows_user_folder("Desktop", Path.home() / "Desktop")
     desktop.mkdir(parents=True, exist_ok=True)
     return desktop / f"{datetime.now():%y%m%d}_{PROCESS_EXPORT_NAME[process]}.xlsx"
+
+
+def _column_width(header: str) -> float:
+    if "품명" in header:
+        return 34
+    if "수주번호 목록" in header:
+        return 36
+    if header == "신규분류요약":
+        return 22
+    if "코드" in header:
+        return 23
+    if header == "수주번호":
+        return 18
+    if header == "이니셜":
+        return 12
+    if "납기일" in header:
+        return 14
+    if header in {"POWER", "CP", "AXIS", "ADD"}:
+        return 11
+    if "수량" in header or header in {*PROCESS_ORDER, "수주 건수"}:
+        return 13
+    return 15
+
+
+def _excel_date(value: object) -> date | None:
+    text = str(value or "").strip()
+    try:
+        return date.fromisoformat(text) if len(text) == 10 else None
+    except ValueError:
+        return None
+
+
+def _write_sheet(workbook, payload: dict, title: str, note: str, table_index: int) -> None:
+    worksheet = workbook.add_worksheet(str(payload["name"])[:31])
+    columns = [str(column) for column in payload["columns"]]
+    rows = list(payload.get("rows") or [])
+    hidden_columns = set(payload.get("hiddenColumns") or [])
+    last_column = len(columns) - 1
+    visible_columns = [index for index, header in enumerate(columns) if header not in hidden_columns]
+    visible_last_column = max(visible_columns, default=last_column)
+
+    title_format = workbook.add_format({
+        "bold": True,
+        "font_color": "#FFFFFF",
+        "font_size": 15,
+        "bg_color": "#0A7AFF",
+        "valign": "vcenter",
+    })
+    note_format = workbook.add_format({
+        "font_color": "#52677E",
+        "font_size": 10,
+        "bg_color": "#EEF5FF",
+        "valign": "vcenter",
+    })
+    header_format = workbook.add_format({
+        "bold": True,
+        "font_color": "#173B63",
+        "bg_color": "#E7EEF7",
+        "align": "center",
+        "valign": "vcenter",
+        "border": 1,
+        "border_color": "#D6E0EB",
+    })
+    date_format = workbook.add_format({"num_format": "yyyy-mm-dd", "valign": "vcenter"})
+    number_format = workbook.add_format({"num_format": "#,##0", "align": "right", "valign": "vcenter"})
+
+    if visible_last_column > 0:
+        worksheet.merge_range(0, 0, 0, visible_last_column, title, title_format)
+        worksheet.merge_range(1, 0, 1, visible_last_column, note, note_format)
+    else:
+        worksheet.write(0, 0, title, title_format)
+        worksheet.write(1, 0, note, note_format)
+    worksheet.set_row(0, 25.5)
+    worksheet.set_row(1, 18.75)
+    worksheet.set_row(3, 21)
+
+    numeric_headers = {*PROCESS_ORDER, "수주 건수"}
+    for row_index, row in enumerate(rows, start=4):
+        worksheet.set_row(row_index, 16.5)
+        for column_index, header in enumerate(columns):
+            value = row[column_index] if column_index < len(row) else ""
+            parsed_date = _excel_date(value) if "납기일" in header else None
+            if parsed_date is not None:
+                worksheet.write_datetime(row_index, column_index, parsed_date, date_format)
+            elif "수량" in header or header in numeric_headers:
+                worksheet.write_number(row_index, column_index, _number(value), number_format)
+            else:
+                worksheet.write(row_index, column_index, value)
+
+    table_columns = []
+    for header in columns:
+        options = {"header": header}
+        if "납기일" in header:
+            options["format"] = date_format
+        elif "수량" in header or header in numeric_headers:
+            options["format"] = number_format
+        table_columns.append(options)
+    if rows:
+        worksheet.add_table(
+            3,
+            0,
+            len(rows) + 3,
+            last_column,
+            {
+                "name": f"ProcessExport{table_index}",
+                "style": "Table Style Medium 2",
+                "columns": table_columns,
+            },
+        )
+    else:
+        for column_index, header in enumerate(columns):
+            worksheet.write(3, column_index, header, header_format)
+        worksheet.autofilter(3, 0, 3, last_column)
+
+    for column_index, header in enumerate(columns):
+        options = {"hidden": True} if header in hidden_columns else None
+        worksheet.set_column(
+            column_index,
+            column_index,
+            _column_width(header),
+            None,
+            options,
+        )
+    worksheet.freeze_panes(4, 0)
+    worksheet.hide_gridlines(2)
+
+
+def _write_workbook(output_path: Path, payload: dict) -> None:
+    try:
+        import xlsxwriter
+    except ImportError as exc:
+        raise RuntimeError(
+            "엑셀 내보내기 구성요소(XlsxWriter)가 설치되지 않았습니다. 프로그램을 다시 설치해 주세요."
+        ) from exc
+
+    with xlsxwriter.Workbook(str(output_path)) as workbook:
+        workbook.set_properties({
+            "title": str(payload.get("title") or "똑딱이 공정 현황"),
+            "subject": "생산3팀 공정 현황",
+            "author": "생산기획팀 RD",
+            "company": "Interojo",
+        })
+        for table_index, sheet in enumerate(payload.get("sheets") or [], start=1):
+            _write_sheet(
+                workbook,
+                sheet,
+                str(payload.get("title") or ""),
+                str(payload.get("note") or ""),
+                table_index,
+            )
 
 
 def export_process_workbook(
@@ -167,41 +295,13 @@ def export_process_workbook(
 ) -> Path:
     output = (Path(output_path) if output_path else desktop_export_path(process)).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    node, builder = _prepare_runtime()
-    runtime = builder.parent
-    token = uuid.uuid4().hex
-    input_path = runtime / f"process_export_{token}.json"
-    # artifact-tool의 Windows 경로 처리 안정성을 위해 ASCII 임시 경로에서 만든 뒤 이동한다.
-    temporary_output = runtime / f"process_output_{token}.xlsx"
-    temporary_preview = runtime / f"process_preview_{token}" if preview_dir else None
     payload = build_process_export_payload(process, detail_rows, compact_rows)
-    input_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    command = [str(node), str(builder), str(input_path), temporary_output.name]
-    if temporary_preview:
-        command.append(temporary_preview.name)
+    temporary_output = Path(tempfile.gettempdir()) / f"ddokddak_process_{uuid.uuid4().hex}.xlsx"
     try:
-        result = subprocess.run(
-            command,
-            cwd=runtime,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=180,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        # 대용량 워크북 종료 시 Node가 Windows에서 비정상 종료 코드를 남기는 경우가 있어도
-        # 완성된 XLSX가 존재하면 원자적으로 교체해 사용한다.
-        if not temporary_output.is_file():
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "엑셀 파일 생성 실패")
+        _write_workbook(temporary_output, payload)
         os.replace(temporary_output, output)
-        if preview_dir and temporary_preview:
-            preview_target = Path(preview_dir).resolve()
-            preview_target.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(temporary_preview, preview_target, dirs_exist_ok=True)
         return output
     finally:
-        input_path.unlink(missing_ok=True)
         temporary_output.unlink(missing_ok=True)
-        if temporary_preview:
-            shutil.rmtree(temporary_preview, ignore_errors=True)
+        # preview_dir is retained in the public signature for existing QA callers.
+        _ = preview_dir
