@@ -89,13 +89,8 @@ def _collect_domestic_order_remarks(
     orders_by_date: dict[str, set[str]] = {}
     for row in rows:
         order_no = str(row.get("so_id") or "").strip()
-        demand_type = str(row.get("demand_type") or "").strip()
-        destination = str(row.get("dest_country") or "").strip()
         date_token = order_no[1:9]
-        if (
-            not order_no.startswith("R") or len(date_token) != 8 or not date_token.isdigit()
-            or destination or demand_type == "PB" or demand_type in SAFETY_DEMAND_TYPES
-        ):
+        if not order_no.startswith("R") or len(date_token) != 8 or not date_token.isdigit():
             continue
         request_date = f"{date_token[:4]}-{date_token[4:6]}-{date_token[6:8]}"
         orders_by_date.setdefault(request_date, set()).add(order_no)
