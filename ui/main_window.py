@@ -4517,7 +4517,26 @@ class MainWindow(QMainWindow):
         path = cls._collection_error_path()
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-            return value if isinstance(value, dict) else {}
+            if not isinstance(value, dict):
+                return {}
+            source_hints = {
+                "bom": "bom_snapshot_collector.py",
+                "aps": "process_status_collector.py",
+                "production": "production_performance_collector.py",
+            }
+            normalized = {}
+            for key, info in value.items():
+                if not isinstance(info, dict):
+                    continue
+                message = str(info.get("message") or "")
+                inferred = next(
+                    (source for source, token in source_hints.items() if token in message),
+                    "",
+                )
+                if inferred and key != inferred:
+                    continue
+                normalized[key] = info
+            return normalized
         except (OSError, ValueError, TypeError):
             return {}
 
@@ -4630,7 +4649,9 @@ class MainWindow(QMainWindow):
         for key, name, path, count_keys in definitions:
             status = self._read_refresh_status(path)
             counts = [int(status[key]) for key in count_keys if status.get(key) is not None]
-            refreshed = status.get("refreshed_at") or status.get("collected_at") or "-"
+            local_refreshed = status.get("refreshed_at") or status.get("collected_at") or "-"
+            source_refreshed = status.get("source_refreshed_at") or ""
+            refreshed = source_refreshed if key == "aps" and source_refreshed else local_refreshed
             count_text = "/".join(f"{count:,}" for count in counts)
             parts.append(f"{name} {count_text}건 · {refreshed}" if counts else f"{name} 미수집")
             controls = getattr(self, "collection_controls", {}).get(key)
@@ -4638,10 +4659,14 @@ class MainWindow(QMainWindow):
                 status_value = str(status.get("status") or "")
                 error_info = collection_errors.get(key)
                 has_error = isinstance(error_info, dict) and bool(error_info.get("message"))
-                success = status_value in {"success", "skipped"} and not has_error
+                retained = status_value == "retained"
+                success = status_value in {"success", "skipped", "retained"} and not has_error
                 state_text = (
                     "● 오류 발생"
                     if has_error
+                    else
+                    "● 원천 0건 · 기존 유지"
+                    if retained
                     else
                     "● 정상 · 변경 없음"
                     if status_value == "skipped"
@@ -4659,6 +4684,12 @@ class MainWindow(QMainWindow):
                     str(error_info.get("message") or "")[:500] if has_error else ""
                 )
                 controls["refreshed"].setText(str(refreshed).replace("T", " ")[:19])
+                if key == "aps":
+                    controls["refreshed"].setToolTip(
+                        f"APS 원천 갱신 {source_refreshed or '-'}\n"
+                        f"로컬 수집 {local_refreshed}\n"
+                        f"마지막 확인 {status.get('checked_at') or local_refreshed}"
+                    )
                 controls["rows"].setText(f"{count_text}건" if count_text else "-")
                 if key == "production":
                     controls["state"].setToolTip(
@@ -4992,6 +5023,38 @@ class MainWindow(QMainWindow):
             return
         forced_error = str(getattr(self, "_collection_forced_error_message", "") or "").strip()
         captured = "\n".join(getattr(self, "_collection_live_output", []))
+        if source == "all":
+            batch_report = self._read_refresh_status(
+                DATA_CENTER_DIR / "settings" / "full_refresh_status.json"
+            )
+            outcomes = batch_report.get("results") if batch_report.get("completed_at") else None
+            if isinstance(outcomes, dict):
+                failed_sources = []
+                changed = set()
+                labels = {"bom": "BOM", "aps": "S관 APS", "production": "생산실적"}
+                for key in ("bom", "aps", "production"):
+                    outcome = outcomes.get(key)
+                    if not isinstance(outcome, dict):
+                        continue
+                    if outcome.get("status") == "error":
+                        failed_sources.append(labels[key])
+                        detail = str(outcome.get("traceback") or outcome.get("error") or "수집 실패")
+                        self._record_collection_error(key, 1, detail)
+                    else:
+                        changed.add(key)
+                        self._clear_collection_errors(key)
+                if failed_sources:
+                    self._refresh_settings_data_status()
+                    self.settings_data_status.setText(
+                        f"부분 수집 완료 · {', '.join(failed_sources)} 오류 · 정상 완료 항목은 반영했습니다."
+                    )
+                    self._collection_forced_error_message = ""
+                    self._collection_live_output = []
+                    self._data_db_signatures = self._current_data_db_signatures()
+                    self._data_status_signatures = self._current_data_status_signatures()
+                    self._reload_changed_data_views(changed)
+                    QTimer.singleShot(1_000, self._run_scheduled_collections)
+                    return
         if exit_code != 0 or forced_error:
             error_parts = [part for part in (forced_error, captured, self.settings_collection_process.errorString()) if part]
             error = "\n\n".join(error_parts) or "수집기가 종료됐지만 오류 내용을 반환하지 않았습니다."

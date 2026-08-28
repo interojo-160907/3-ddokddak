@@ -59,6 +59,14 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+def _read_status(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
 def _write_raw(path: Path, value: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -187,15 +195,27 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
         if str(row.get("res_site_id") or "").strip() == FACTORY
         and str(row.get("oper_id") or "").strip() in PROCESS_CODES
     ]
-    if not rows:
-        raise RuntimeError("S관 공정 진행 데이터가 없습니다.")
-
-    order_remarks, remark_error = _collect_domestic_order_remarks(rows, api_key, timeout)
-
     now = datetime.now().astimezone()
     stamp = now.strftime("%Y%m%d_%H%M%S")
     raw_path = RAW_DIR / f"aps_s_factory_{stamp}.json.gz"
     _write_raw(raw_path, {"collected_at": now.isoformat(timespec="seconds"), "factory": FACTORY, "meta": meta_after, "payload": payload})
+    if not rows:
+        previous = _read_status(STATUS_PATH)
+        if DB_PATH.exists() and int(previous.get("stored_rows") or 0) > 0:
+            result = dict(previous)
+            result.update({
+                "status": "retained",
+                "checked_at": now.isoformat(timespec="seconds"),
+                "retained_reason": "APS 원천 응답의 S관 공정 데이터가 0건이어서 마지막 정상 데이터를 유지합니다.",
+                "attempted_source_rows": len(source_rows),
+                "attempted_source_refreshed_at": str(payload.get("source_refreshed_at") or ""),
+                "attempted_raw_snapshot": str(raw_path),
+            })
+            _atomic_json(STATUS_PATH, result)
+            return result
+        raise RuntimeError("S관 공정 진행 데이터가 없습니다.")
+
+    order_remarks, remark_error = _collect_domestic_order_remarks(rows, api_key, timeout)
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     temporary_db = DATA_DIR / "aps_process_status.building.sqlite"
