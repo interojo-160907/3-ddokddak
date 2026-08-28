@@ -42,6 +42,21 @@ FIELDS = (
 )
 
 
+def _repair_legacy_cp949(value: Any) -> Any:
+    """이미 Latin-1 문자로 깨진 CP949 한글만 안전하게 복원한다."""
+    if isinstance(value, dict):
+        return {key: _repair_legacy_cp949(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_repair_legacy_cp949(item) for item in value]
+    if not isinstance(value, str) or any("가" <= char <= "힣" for char in value):
+        return value
+    try:
+        repaired = value.encode("latin-1").decode("cp949")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+    return repaired if any("가" <= char <= "힣" for char in repaired) else value
+
+
 def _request(endpoint: str, params: dict[str, Any], api_key: str, timeout: int) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
     if api_key:
@@ -49,7 +64,7 @@ def _request(endpoint: str, params: dict[str, Any], api_key: str, timeout: int) 
     response = requests.get(f"{BASE_URL}{endpoint}", params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     response.encoding = "utf-8"
-    return response.json()
+    return _repair_legacy_cp949(response.json())
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
