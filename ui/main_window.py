@@ -1244,7 +1244,7 @@ class MainWindow(QMainWindow):
         self.api_health_timer.start()
         QTimer.singleShot(800, self._start_api_health_check)
         self._apply_collection_timers(run_initial=True)
-        QTimer.singleShot(5_000, self._run_scheduled_collections)
+        QTimer.singleShot(5_000, lambda: self._run_global_refresh(reset_filters=False))
         QTimer.singleShot(20_000, lambda: self._start_data_cleanup(scheduled=True))
 
     @staticmethod
@@ -1463,6 +1463,15 @@ class MainWindow(QMainWindow):
         self.data_status.setFocusPolicy(Qt.NoFocus)
         self.data_status.clicked.connect(self._open_collection_status)
         header.addWidget(self.data_status, 0, Qt.AlignTop)
+        self.global_refresh_button = QPushButton("새로고침")
+        self.global_refresh_button.setObjectName("SecondaryButton")
+        self.global_refresh_button.setIcon(qta.icon("fa6s.rotate", color="#35618F"))
+        self.global_refresh_button.setFixedHeight(34)
+        self.global_refresh_button.setToolTip(
+            "모든 화면 필터를 최초값으로 되돌리고 BOM·APS·생산실적 DB를 한 번 갱신합니다."
+        )
+        self.global_refresh_button.clicked.connect(self._run_global_refresh)
+        header.addWidget(self.global_refresh_button, 0, Qt.AlignTop)
         content_layout.addWidget(self.global_header)
 
         self.stack = QStackedWidget()
@@ -4846,6 +4855,36 @@ class MainWindow(QMainWindow):
             return
         self._start_data_collection("all")
 
+    def _reset_page_filters_to_defaults(self) -> None:
+        if hasattr(self, "risk_channel_checks"):
+            for channel, check in self.risk_channel_checks.items():
+                check.setChecked(channel == "해외")
+            self._refresh_risk_alerts()
+        default_period = self.dashboard_data.get("default_production_period", "current")
+        period_button = getattr(self, "production_period_buttons", {}).get(default_period)
+        if period_button is not None and not period_button.isChecked():
+            period_button.click()
+        if hasattr(self, "process_overview_page"):
+            self.process_overview_page.reset_all_filters()
+        for page in getattr(self, "fixed_process_pages", {}).values():
+            page.reset_all_filters()
+        bom_page = getattr(self, "bom_page", None)
+        if bom_page is not None:
+            for method_name in (
+                "_reset_product_filters",
+                "_reset_saline_lead_filters",
+                "_reset_tree_search",
+                "_reset_code_search",
+            ):
+                method = getattr(bom_page, method_name, None)
+                if callable(method):
+                    method()
+
+    def _run_global_refresh(self, _checked: bool = False, *, reset_filters: bool = True) -> None:
+        if reset_filters:
+            self._reset_page_filters_to_defaults()
+        self._start_full_data_refresh()
+
     def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             if not scheduled:
@@ -4926,6 +4965,14 @@ class MainWindow(QMainWindow):
         self.collection_watchdog_timer.start(360_000 if source == "all" else 300_000)
 
     def _set_collection_busy(self, busy: bool, source: str = "") -> None:
+        if hasattr(self, "global_refresh_button"):
+            self.global_refresh_button.setEnabled(not busy)
+            self.global_refresh_button.setText("새로고침 중…" if busy else "새로고침")
+        if hasattr(self, "data_snapshot_timer"):
+            if busy:
+                self.data_snapshot_timer.stop()
+            elif not self.data_snapshot_timer.isActive():
+                self.data_snapshot_timer.start()
         if hasattr(self, "settings_refresh_button"):
             self.settings_refresh_button.setEnabled(True)
             self.settings_refresh_button.setText("수집 중단" if busy else "전체 데이터 수집")

@@ -4,6 +4,7 @@ import json
 import os
 import sqlite3
 import calendar
+from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -105,7 +106,7 @@ class DashboardService:
     def order_details(self, order_no: str) -> dict:
         if not APS_DB.is_file() or not str(order_no).strip():
             return {"order": {}, "items": []}
-        with _connect(APS_DB) as connection:
+        with closing(_connect(APS_DB)) as connection:
             remarks = _order_remarks(connection)
             source = connection.execute(
                 "SELECT so_id,MAX(initial) initial,MIN(due_date) due_date,MAX(cust_name) cust_name,"
@@ -181,7 +182,7 @@ class DashboardService:
 
     @staticmethod
     def _load_aps(result: dict) -> None:
-        with _connect(APS_DB) as connection:
+        with closing(_connect(APS_DB)) as connection:
             remarks = _order_remarks(connection)
             for row in connection.execute(
                 "SELECT oper_id,SUM(COALESCE(plan_qty,0)) qty FROM aps_plan "
@@ -293,7 +294,7 @@ class DashboardService:
                     for name in PROCESS_ORDER
                 },
             }
-        with _connect(PRODUCTION_DB) as connection:
+        with closing(_connect(PRODUCTION_DB)) as connection:
             rows = connection.execute(
                 "SELECT pr_dt,gong_cd,sale_cd,"
                 "SUM(COALESCE(tot_qty,0)) production_qty,SUM(COALESCE(pr_qty,0)) good_qty,"
@@ -313,7 +314,7 @@ class DashboardService:
         color_codes: set[str] = set()
         classification_by_code: dict[str, str] = {}
         if BOM_DB.is_file():
-            with _connect(BOM_DB) as connection:
+            with closing(_connect(BOM_DB)) as connection:
                 product_rows = connection.execute(
                     "SELECT nm_cd,full_gu_nm,color_yn FROM product_name_master"
                 ).fetchall()

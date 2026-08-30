@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 from calendar import monthrange
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
@@ -35,6 +36,21 @@ BASE_URL = "https://plan.interojo.net"
 S_FACTORY_CODE = "04"
 PROCESS_CODES = ("10", "20", "45", "55", "80")
 DAILY_FULL_HOUR = 7
+
+
+def _replace_database(source: Path, destination: Path, attempts: int = 60) -> None:
+    """Windows에서 화면 조회가 끝날 때까지 DB 교체를 짧게 재시도한다."""
+    last_error: PermissionError | None = None
+    for attempt in range(attempts):
+        try:
+            source.replace(destination)
+            return
+        except PermissionError as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(0.25)
+    if last_error is not None:
+        raise last_error
 
 
 def _read_status() -> dict[str, Any]:
@@ -269,7 +285,7 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
                 raise RuntimeError("생산실적 SQLite 무결성 오류")
         finally:
             connection.close()
-        temporary_db.replace(DB_PATH)
+        _replace_database(temporary_db, DB_PATH)
     else:
         connection = sqlite3.connect(DB_PATH)
         try:
