@@ -1464,11 +1464,11 @@ class MainWindow(QMainWindow):
         self.data_status.clicked.connect(self._open_collection_status)
         header.addWidget(self.data_status, 0, Qt.AlignTop)
         self.global_refresh_button = QPushButton("새로고침")
-        self.global_refresh_button.setObjectName("SecondaryButton")
+        self.global_refresh_button.setObjectName("GlobalRefreshButton")
         self.global_refresh_button.setIcon(qta.icon("fa6s.rotate", color="#35618F"))
         self.global_refresh_button.setFixedHeight(34)
         self.global_refresh_button.setToolTip(
-            "모든 화면 필터를 최초값으로 되돌리고 BOM·APS·생산실적 DB를 한 번 갱신합니다."
+            "모든 화면 필터를 최초값으로 되돌리고 저장된 최신 데이터를 다시 불러옵니다."
         )
         self.global_refresh_button.clicked.connect(self._run_global_refresh)
         header.addWidget(self.global_refresh_button, 0, Qt.AlignTop)
