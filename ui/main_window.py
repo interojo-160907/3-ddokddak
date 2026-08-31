@@ -4881,9 +4881,21 @@ class MainWindow(QMainWindow):
                     method()
 
     def _run_global_refresh(self, _checked: bool = False, *, reset_filters: bool = True) -> None:
-        if reset_filters:
-            self._reset_page_filters_to_defaults()
-        self._start_full_data_refresh()
+        button = getattr(self, "global_refresh_button", None)
+        if button is not None:
+            button.setEnabled(False)
+            button.setText("새로고침 중…")
+            button.repaint()
+        try:
+            if reset_filters:
+                self._reset_page_filters_to_defaults()
+            self._data_db_signatures = self._current_data_db_signatures()
+            self._data_status_signatures = self._current_data_status_signatures()
+            self._reload_changed_data_views({"bom", "aps", "production"})
+        finally:
+            if button is not None:
+                button.setText("새로고침")
+                button.setEnabled(True)
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
@@ -4965,9 +4977,6 @@ class MainWindow(QMainWindow):
         self.collection_watchdog_timer.start(360_000 if source == "all" else 300_000)
 
     def _set_collection_busy(self, busy: bool, source: str = "") -> None:
-        if hasattr(self, "global_refresh_button"):
-            self.global_refresh_button.setEnabled(not busy)
-            self.global_refresh_button.setText("새로고침 중…" if busy else "새로고침")
         if hasattr(self, "data_snapshot_timer"):
             if busy:
                 self.data_snapshot_timer.stop()
