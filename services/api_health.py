@@ -37,9 +37,13 @@ def check_collection_apis(timeout: float = 6.0) -> dict[str, bool]:
             "/api/production-performance",
             {"date_from": today, "date_to": today, "limit": 1},
         ),
+        "live": (
+            "/api/inventory-ledger-product",
+            {"date_from": today, "date_to": today, "wh_nm": "검사접착", "limit": 1},
+        ),
     }
     results = {key: False for key in probes}
-    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="api-health") as executor:
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="api-health") as executor:
         futures = {
             executor.submit(_probe, path, params, timeout): key
             for key, (path, params) in probes.items()

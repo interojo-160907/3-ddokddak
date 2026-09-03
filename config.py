@@ -8,7 +8,7 @@ from services.data_location import resolve_data_root
 
 APP_NAME = "똑딱이 생산3팀"
 APP_DISPLAY_NAME = "똑딱이 - 생산3팀 전용"
-APP_VERSION = "0.1.20"
+APP_VERSION = "0.1.21"
 APP_USER_MODEL_ID = "Ddokddak.ProductionTeam3.Source"
 DEFAULT_FACTORY = "S관"
 
@@ -28,15 +28,27 @@ SNAPSHOT_DIR = DATA_DIR / "snapshots"
 LOG_DIR = ROOT_DIR / "logs"
 
 
+def collection_directories(root: Path) -> tuple[Path, ...]:
+    return (
+        root,
+        root / "bom" / "snapshot",
+        root / "bom" / "backup",
+        root / "bom" / "raw_api",
+        root / "process-status" / "snapshot",
+        root / "process-status" / "backup",
+        root / "process-status" / "raw_api",
+        root / "production-performance" / "snapshot",
+        root / "production-performance" / "backup",
+        root / "production-performance" / "raw_api",
+        root / "live-production-need" / "snapshot",
+        root / "live-production-need" / "backup",
+        root / "settings",
+    )
+
+
 def ensure_directories() -> None:
     for path in (
-        DATA_CENTER_DIR,
-        DATA_CENTER_DIR / "bom" / "snapshot",
-        DATA_CENTER_DIR / "bom" / "backups",
-        DATA_CENTER_DIR / "process-status" / "snapshot",
-        DATA_CENTER_DIR / "process-status" / "backups",
-        DATA_CENTER_DIR / "production-performance" / "snapshot",
-        DATA_CENTER_DIR / "production-performance" / "backups",
+        *collection_directories(DATA_CENTER_DIR),
         LEAD_SHEET_PDF_BACKUP_DIR,
         LEAD_SHEET_PREVIEW_CACHE_DIR,
         ASSET_DIR,

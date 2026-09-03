@@ -40,6 +40,7 @@ CODE_NAME = {
     "T코드": ("판매명", "품명판매"),
 }
 PROCESS_ORDER = ("사출", "분리", "하이드레이션", "접착", "누수규격")
+OVERVIEW_CODE_ORDER = ("T코드", "P코드", "Q코드", "R코드")
 
 
 def _number(value: object) -> int | float:
@@ -139,6 +140,117 @@ def build_process_export_payload(
     }
 
 
+def build_overview_export_payload(
+    detail_rows: list[dict],
+    order_rows: list[dict],
+    product_rows: list[dict],
+    *,
+    filename_tag: str = "",
+) -> dict:
+    """공정 전체 화면 전용 3시트 내보내기 자료를 만든다."""
+
+    def process_values(row: dict) -> list[int | float]:
+        process = row.get("공정") or {}
+        return [_number(process.get(name)) for name in PROCESS_ORDER]
+
+    order_columns = (
+        "신규분류요약", "이니셜", "수주번호", "품명", "최우선 납기일", *PROCESS_ORDER,
+    )
+    order_values = [
+        [
+            str(row.get("신규분류요약") or ""),
+            str(row.get("이니셜") or ""),
+            str(row.get("수주번호") or ""),
+            str(row.get("품명") or ""),
+            str(row.get("납기일") or ""),
+            *process_values(row),
+        ]
+        for row in order_rows
+    ]
+
+    product_columns = (
+        "신규분류요약", "이니셜", "수주번호", "품명",
+        "POWER", "CP", "AXIS", "ADD", "최우선 납기일", *PROCESS_ORDER,
+    )
+    product_values = [
+        [
+            str(row.get("신규분류요약") or ""),
+            str(row.get("이니셜") or ""),
+            str(row.get("수주번호") or ""),
+            str(row.get("품명") or ""),
+            str(row.get("POWER") or ""),
+            str(row.get("CP") or ""),
+            str(row.get("AXIS") or ""),
+            str(row.get("ADD") or ""),
+            str(row.get("납기일") or ""),
+            *process_values(row),
+        ]
+        for row in product_rows
+    ]
+
+    detail_specs: list[tuple[str, str]] = [
+        ("신규분류요약", "신규분류요약"),
+        ("이니셜", "이니셜"),
+        ("수주번호", "수주번호"),
+        ("판매명", "품명판매"),
+        ("POWER", "POWER"),
+        ("CP", "CP"),
+        ("AXIS", "AXIS"),
+        ("ADD", "ADD"),
+        ("납기일", "납기일"),
+        *((process, process) for process in PROCESS_ORDER),
+    ]
+    # 개별 공정 내보내기와 동일하게 보이는 핵심 열을 먼저 배치하고,
+    # 필요할 때 Excel에서 펼쳐볼 코드·품명 열은 표의 맨 오른쪽에 둔다.
+    # 판매명은 화면의 기본 품명이므로 보이는 열에 두고 T코드만 숨김으로 보낸다.
+    detail_specs.append(("T코드", "T코드"))
+    hidden_columns: list[str] = ["T코드"]
+    for code in ("P코드", "Q코드", "R코드"):
+        name_header, name_source = CODE_NAME[code]
+        detail_specs.extend(((code, code), (name_header, name_source)))
+        hidden_columns.extend((code, name_header))
+    detail_columns = tuple(header for header, _source in detail_specs)
+    detail_values = [
+        [
+            _number((row.get("공정") or {}).get(source))
+            if header in PROCESS_ORDER
+            else str(row.get(source) or "")
+            for header, source in detail_specs
+        ]
+        for row in detail_rows
+    ]
+
+    tag = str(filename_tag or "").strip()
+    title_label = "실시간 실적 반영" if tag else "공정 현황(APS)"
+    return {
+        "title": f"{datetime.now():%y%m%d} {title_label}",
+        "note": (
+            "현재 화면 필터 기준 · 간략히보기 수주별/제품별 · "
+            "납기별 상세는 판매명 기본 표시, 품목코드·공정별 품명은 오른쪽 숨김"
+        ),
+        "sheets": [
+            {
+                "name": "간략히보기 수주별",
+                "columns": list(order_columns),
+                "rows": order_values,
+                "hiddenColumns": [],
+            },
+            {
+                "name": "간략히보기 제품별",
+                "columns": list(product_columns),
+                "rows": product_values,
+                "hiddenColumns": [],
+            },
+            {
+                "name": "납기별 상세",
+                "columns": list(detail_columns),
+                "rows": detail_values,
+                "hiddenColumns": hidden_columns,
+            },
+        ],
+    }
+
+
 def _windows_user_folder(value_name: str, fallback: Path) -> Path:
     if os.name != "nt":
         return fallback
@@ -156,10 +268,20 @@ def _windows_user_folder(value_name: str, fallback: Path) -> Path:
     return fallback
 
 
-def desktop_export_path(process: str) -> Path:
+def desktop_export_path(process: str, *, filename_tag: str = "") -> Path:
     desktop = _windows_user_folder("Desktop", Path.home() / "Desktop")
     desktop.mkdir(parents=True, exist_ok=True)
-    return desktop / f"{datetime.now():%y%m%d}_{PROCESS_EXPORT_NAME[process]}.xlsx"
+    tag = str(filename_tag or "").strip()
+    tag_part = f"_{tag}" if tag else ""
+    return desktop / f"{datetime.now():%y%m%d}{tag_part}_{PROCESS_EXPORT_NAME[process]}.xlsx"
+
+
+def desktop_overview_export_path(*, filename_tag: str = "") -> Path:
+    desktop = _windows_user_folder("Desktop", Path.home() / "Desktop")
+    desktop.mkdir(parents=True, exist_ok=True)
+    tag = str(filename_tag or "").strip()
+    label = "실시간실적반영" if tag else "공정현황_APS"
+    return desktop / f"{datetime.now():%y%m%d}_{label}.xlsx"
 
 
 def _available_output_path(output_path: Path) -> Path:
@@ -332,8 +454,13 @@ def export_process_workbook(
     *,
     output_path: Path | None = None,
     preview_dir: Path | None = None,
+    filename_tag: str = "",
 ) -> Path:
-    requested_output = (Path(output_path) if output_path else desktop_export_path(process)).resolve()
+    requested_output = (
+        Path(output_path)
+        if output_path
+        else desktop_export_path(process, filename_tag=filename_tag)
+    ).resolve()
     output = _available_output_path(requested_output)
     output.parent.mkdir(parents=True, exist_ok=True)
     payload = build_process_export_payload(process, detail_rows, compact_rows)
@@ -346,3 +473,33 @@ def export_process_workbook(
         temporary_output.unlink(missing_ok=True)
         # preview_dir is retained in the public signature for existing QA callers.
         _ = preview_dir
+
+
+def export_overview_workbook(
+    detail_rows: list[dict],
+    order_rows: list[dict],
+    product_rows: list[dict],
+    *,
+    output_path: Path | None = None,
+    filename_tag: str = "",
+) -> Path:
+    requested_output = (
+        Path(output_path)
+        if output_path
+        else desktop_overview_export_path(filename_tag=filename_tag)
+    ).resolve()
+    output = _available_output_path(requested_output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_overview_export_payload(
+        detail_rows,
+        order_rows,
+        product_rows,
+        filename_tag=filename_tag,
+    )
+    temporary_output = Path(tempfile.gettempdir()) / f"ddokddak_overview_{uuid.uuid4().hex}.xlsx"
+    try:
+        _write_workbook(temporary_output, payload)
+        os.replace(temporary_output, output)
+        return output
+    finally:
+        temporary_output.unlink(missing_ok=True)

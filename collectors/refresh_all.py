@@ -10,11 +10,13 @@ try:
     from collectors.bom_snapshot_collector import refresh as refresh_bom
     from collectors.process_status_collector import refresh as refresh_aps
     from collectors.production_performance_collector import refresh as refresh_production
+    from collectors.live_production_need_collector import refresh as refresh_live
     from services.data_location import resolve_data_root
 except ImportError:
     from bom_snapshot_collector import refresh as refresh_bom
     from process_status_collector import refresh as refresh_aps
     from production_performance_collector import refresh as refresh_production
+    from live_production_need_collector import refresh as refresh_live
     from services.data_location import resolve_data_root
 
 
@@ -44,6 +46,7 @@ def main() -> int:
         ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=True)),
         ("aps", lambda: refresh_aps(api_key=api_key, timeout=300)),
         ("production", lambda: refresh_production(api_key=api_key, timeout=240)),
+        ("live", lambda: refresh_live(api_key=api_key, timeout=240)),
     )
     failed = False
     for key, collect in collectors:

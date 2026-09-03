@@ -132,16 +132,26 @@ def _channel(demand_type: str, destination: str) -> str:
 
 
 class ProcessStatusService:
+    def __init__(
+        self,
+        database_path: Path | str | None = None,
+        status_path: Path | str | None = None,
+    ) -> None:
+        self.database_path = Path(database_path) if database_path else DB_PATH
+        self.status_path = Path(status_path) if status_path else STATUS_PATH
+
     def status(self) -> dict:
         try:
-            return json.loads(STATUS_PATH.read_text(encoding="utf-8"))
+            return json.loads(self.status_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
 
     def load_rows(self, search: str = "", process: str = "전체") -> list[dict]:
-        if not DB_PATH.is_file():
+        if not self.database_path.is_file():
             return []
-        connection = sqlite3.connect(f"file:{DB_PATH.as_posix()}?mode=ro", uri=True)
+        connection = sqlite3.connect(
+            f"file:{self.database_path.as_posix()}?mode=ro", uri=True
+        )
         connection.row_factory = sqlite3.Row
         try:
             clauses = []

@@ -69,6 +69,15 @@ def should_run_daily_full(
 ) -> bool:
     if force_full or not database_exists:
         return True
+    last_date_text = str(previous_status.get("date_to") or "")[:10]
+    try:
+        last_date = date.fromisoformat(last_date_text)
+    except ValueError:
+        return True
+    # 프로그램을 7일 넘게 꺼 두었다 다시 켜도 최근 7일 증분 범위 사이에
+    # 공백이 생기지 않도록 즉시 전월~오늘 전체를 다시 구성한다.
+    if last_date < now.date() - timedelta(days=6):
+        return True
     return (
         now.hour >= DAILY_FULL_HOUR
         and str(previous_status.get("daily_full_date") or "") != now.date().isoformat()

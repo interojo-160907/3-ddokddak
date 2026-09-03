@@ -14,6 +14,8 @@ from config import DATA_CENTER_DIR
 ROOT = DATA_CENTER_DIR
 APS_DB = ROOT / "process-status" / "aps_process_status.sqlite"
 APS_STATUS = ROOT / "process-status" / "snapshot" / "refresh_status.json"
+LIVE_DB = ROOT / "live-production-need" / "current_production_need.sqlite"
+LIVE_STATUS = ROOT / "live-production-need" / "snapshot" / "refresh_status.json"
 PRODUCTION_DB = ROOT / "production-performance" / "production_performance.sqlite"
 PRODUCTION_STATUS = ROOT / "production-performance" / "snapshot" / "refresh_status.json"
 BOM_DB = ROOT / "bom" / "product_reference.sqlite"
@@ -43,6 +45,21 @@ def _connect(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def _live_cycle_matches() -> bool:
+    """실시간 계산이 현재 APS 회차를 기준으로 만들어졌는지 확인한다."""
+    if not LIVE_DB.is_file():
+        return False
+    aps_cycle = str(_status(APS_STATUS).get("source_refreshed_at") or "").strip()
+    live_status = _status(LIVE_STATUS)
+    live_cycle = str(live_status.get("aps_source_refreshed_at") or "").strip()
+    return bool(
+        aps_cycle
+        and live_cycle
+        and aps_cycle == live_cycle
+        and str(live_status.get("status") or "") == "success"
+    )
 
 
 def _order_remarks(connection: sqlite3.Connection) -> dict[str, str]:
@@ -94,11 +111,13 @@ class DashboardService:
             "default_production_period": "previous" if date.today().day == 1 else "current",
             "risks": [],
             "aps_status": _status(APS_STATUS),
+            "live_status": _status(LIVE_STATUS),
             "production_status": _status(PRODUCTION_STATUS),
             "bom_status": _status(BOM_STATUS),
         }
         if APS_DB.is_file():
             self._load_aps(result)
+            self._apply_live_risk_status(result)
         if PRODUCTION_DB.is_file():
             self._load_production(result)
         return result
@@ -106,13 +125,14 @@ class DashboardService:
     def order_details(self, order_no: str) -> dict:
         if not APS_DB.is_file() or not str(order_no).strip():
             return {"order": {}, "items": []}
+        normalized_order = str(order_no).strip()
         with closing(_connect(APS_DB)) as connection:
             remarks = _order_remarks(connection)
             source = connection.execute(
                 "SELECT so_id,MAX(initial) initial,MIN(due_date) due_date,MAX(cust_name) cust_name,"
                 "MAX(dest_country) dest_country,MAX(demand_type) demand_type,MAX(res_site_id) factory "
                 "FROM aps_plan WHERE so_id=? GROUP BY so_id",
-                (str(order_no).strip(),),
+                (normalized_order,),
             ).fetchone()
             rows = connection.execute(
                 "SELECT demand_group_id,demand_item_id,demand_item_name,power,"
@@ -120,10 +140,37 @@ class DashboardService:
                 "FROM aps_plan WHERE so_id=? AND oper_id IN ('10','20','45','55','80') "
                 "GROUP BY demand_group_id,demand_item_id,demand_item_name,power,oper_id "
                 "ORDER BY demand_item_id,power,oper_id",
-                (str(order_no).strip(),),
+                (normalized_order,),
             ).fetchall()
         if source is None:
             return {"order": {}, "items": []}
+
+        live_available = _live_cycle_matches()
+        current_by_key: dict[tuple[str, ...], float] = {}
+        if live_available:
+            try:
+                with closing(_connect(LIVE_DB)) as connection:
+                    live_rows = connection.execute(
+                        "SELECT demand_group_id,demand_item_id,demand_item_name,power,oper_id,"
+                        "SUM(COALESCE(plan_qty,0)) current_qty FROM aps_plan "
+                        "WHERE so_id=? AND oper_id IN ('10','20','45','55','80') "
+                        "GROUP BY demand_group_id,demand_item_id,demand_item_name,power,oper_id",
+                        (normalized_order,),
+                    ).fetchall()
+                current_by_key = {
+                    (
+                        str(row["demand_group_id"] or ""),
+                        str(row["demand_item_id"] or ""),
+                        str(row["demand_item_name"] or ""),
+                        str(row["power"] or ""),
+                        str(row["oper_id"] or ""),
+                    ): float(row["current_qty"] or 0)
+                    for row in live_rows
+                }
+            except sqlite3.Error:
+                live_available = False
+                current_by_key = {}
+
         grouped: dict[tuple[str, ...], dict] = {}
         for row in rows:
             key = (
@@ -135,12 +182,18 @@ class DashboardService:
                 {
                     "classification": key[0], "item_code": key[1], "item_name": key[2],
                     "power": key[3], "order_qty": float(row["demand_qty"] or 0),
+                    "current": {name: 0.0 for name in PROCESS_ORDER},
                     **{name: 0.0 for name in PROCESS_ORDER},
                 },
             )
             name = PROCESS_NAMES.get(str(row["oper_id"]))
             if name:
                 target[name] += float(row["plan_qty"] or 0)
+                if live_available:
+                    target["current"][name] += current_by_key.get(
+                        (*key, str(row["oper_id"] or "")),
+                        float(row["plan_qty"] or 0),
+                    )
         items = sorted(grouped.values(), key=lambda row: (row["item_code"], row["power"]))
         products_by_code: dict[tuple[str, str], dict] = {}
         for row in items:
@@ -152,6 +205,7 @@ class DashboardService:
                     "item_name": product_key[1],
                     "order_qty": 0.0,
                     "spec_count": 0,
+                    "current": {name: 0.0 for name in PROCESS_ORDER},
                     **{name: 0.0 for name in PROCESS_ORDER},
                 },
             )
@@ -159,6 +213,14 @@ class DashboardService:
             product["spec_count"] += 1
             for name in PROCESS_ORDER:
                 product[name] += float(row.get(name) or 0)
+                if live_available:
+                    product["current"][name] += float(row.get("current", {}).get(name) or 0)
+        for product in products_by_code.values():
+            product["live_available"] = live_available
+            product["work_completed"] = bool(
+                live_available
+                and sum(float(product["current"].get(name) or 0) for name in PROCESS_ORDER) <= 0
+            )
         products = sorted(
             products_by_code.values(),
             key=lambda row: (row["classification"], row["item_name"]),
@@ -167,18 +229,67 @@ class DashboardService:
             name: sum(float(row.get(name) or 0) for row in products)
             for name in PROCESS_ORDER
         }
+        current_process_totals = {
+            name: sum(float(row.get("current", {}).get(name) or 0) for row in products)
+            for name in PROCESS_ORDER
+        }
         order = dict(source)
-        order["remark"] = remarks.get(str(order_no).strip(), "")
+        order["remark"] = remarks.get(normalized_order, "")
         order["item_count"] = len(products)
         order["spec_count"] = len(items)
         order["order_qty"] = sum(float(row["order_qty"] or 0) for row in items)
         order["remaining_qty"] = sum(process_totals.values())
+        order["aps_remaining_qty"] = order["remaining_qty"]
+        order["current_remaining_qty"] = (
+            sum(current_process_totals.values()) if live_available else None
+        )
+        order["live_available"] = live_available
+        order["work_completed"] = bool(
+            live_available and float(order["current_remaining_qty"] or 0) <= 0
+        )
         return {
             "order": order,
             "items": items,
             "products": products,
             "process_totals": process_totals,
+            "current_process_totals": current_process_totals,
+            "live_available": live_available,
         }
+
+    @staticmethod
+    def _apply_live_risk_status(result: dict) -> None:
+        """APS 리스크 수량을 보존하면서 현재 잔여와 완료 여부를 덧붙인다."""
+        if not result.get("risks") or not _live_cycle_matches():
+            return
+        try:
+            with closing(_connect(LIVE_DB)) as connection:
+                rows = connection.execute(
+                    "SELECT so_id,"
+                    "SUM(CASE WHEN oper_id IN ('10','20','45','55','80') "
+                    "THEN COALESCE(plan_qty,0) ELSE 0 END) current_qty,"
+                    "SUM(CASE WHEN oper_id='80' THEN COALESCE(plan_qty,0) ELSE 0 END) final_qty "
+                    "FROM aps_plan GROUP BY so_id"
+                ).fetchall()
+        except sqlite3.Error:
+            return
+        current_by_order = {
+            str(row["so_id"] or "").strip(): {
+                "current_qty": float(row["current_qty"] or 0),
+                "final_qty": float(row["final_qty"] or 0),
+            }
+            for row in rows
+        }
+        for risk in result["risks"]:
+            current = current_by_order.get(str(risk.get("order_no") or "").strip())
+            if current is None:
+                continue
+            risk["live_available"] = True
+            risk["current_qty"] = current["current_qty"]
+            risk["final_qty"] = current["final_qty"]
+            # 최종공정만 0이고 앞 공정이 남은 수주를 완료로 오인하지 않는다.
+            risk["work_completed"] = bool(
+                current["final_qty"] <= 0 and current["current_qty"] <= 0
+            )
 
     @staticmethod
     def _load_aps(result: dict) -> None:

@@ -21,6 +21,7 @@ a = Analysis(
         "collectors.data_retention_cleanup",
         "collectors.process_status_collector",
         "collectors.production_performance_collector",
+        "collectors.live_production_need_collector",
         "collectors.refresh_all",
     ],
     hookspath=[],
@@ -30,6 +31,21 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
+# Codex/workspace helper runtimes can prepend Poppler DLLs to PATH while
+# packaging.  Their ICU runtime is not an application dependency and shadows
+# Qt's Windows ICU integration at startup, which makes QtCore fail to load.
+# Keep those foreign helper DLLs out of the distributable.
+_foreign_runtime_markers = ("codex-runtimes", "poppler")
+_foreign_runtime_names = {"icuuc.dll", "icudt78.dll"}
+a.binaries = [
+    entry
+    for entry in a.binaries
+    if not (
+        Path(entry[0]).name.lower() in _foreign_runtime_names
+        and all(marker in str(entry[1]).lower() for marker in _foreign_runtime_markers)
+    )
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(

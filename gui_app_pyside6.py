@@ -32,6 +32,7 @@ COLLECTOR_MODULES = {
     "data_retention_cleanup": "collectors.data_retention_cleanup",
     "process_status_collector": "collectors.process_status_collector",
     "production_performance_collector": "collectors.production_performance_collector",
+    "live_production_need_collector": "collectors.live_production_need_collector",
     "refresh_all": "collectors.refresh_all",
 }
 
@@ -40,6 +41,8 @@ _INSTANCE_MUTEX_HANDLE = None
 
 def acquire_single_instance() -> bool:
     global _INSTANCE_MUTEX_HANDLE
+    if os.getenv("DDOKDDAK_PROD3_ALLOW_PARALLEL", "").strip() == "1":
+        return True
     if sys.platform != "win32":
         return True
     handle = ctypes.windll.kernel32.CreateMutexW(

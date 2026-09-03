@@ -11,6 +11,7 @@ DEFAULT_SCHEDULE = {
     "bom_minutes": 60,
     "aps_minutes": 1,
     "production_minutes": 60,
+    "live_minutes": 60,
 }
 
 

@@ -16,7 +16,7 @@ from services.process_status_service import (
     DB_PATH, PROCESS_ORDER, ProcessStatusService, classification_sort_key,
     power_sort_key,
 )
-from services.process_excel_exporter import export_process_workbook
+from services.process_excel_exporter import export_overview_workbook, export_process_workbook
 from ui.message_dialog import show_app_message
 
 
@@ -390,6 +390,7 @@ class DueDetailPage(QWidget):
     reset_requested = Signal()
     filtered_rows_changed = Signal(object)
     search_scope_changed = Signal()
+    process_selected = Signal(str)
 
     PROCESS_DEFAULT_CODE = {
         "사출": "R코드",
@@ -413,9 +414,16 @@ class DueDetailPage(QWidget):
         "포장": "누수규격",
     }
 
-    def __init__(self, parent: QWidget | None = None, *, fixed_process: str | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        fixed_process: str | None = None,
+        include_packaging: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.fixed_process = fixed_process
+        self.include_packaging = include_packaging
         self.all_rows: list[dict] = []
         self._filtered_rows: list[dict] = []
         self._displayed_rows: list[dict] = []
@@ -490,7 +498,7 @@ class DueDetailPage(QWidget):
             button.setStyleSheet(FILTER_BUTTON_SELECTION_STYLE)
             button.setCheckable(True)
             button.setProperty("processName", process_name)
-            button.setChecked(process_name == (fixed_process or "누수규격"))
+            button.setChecked(process_name == (fixed_process or "전체"))
             button.clicked.connect(self._process_changed)
             self.process_group.addButton(button)
             self.process_buttons.append(button)
@@ -617,7 +625,7 @@ class DueDetailPage(QWidget):
             category: sum(
                 float(row.get("공정", {}).get(process, 0) or 0)
                 if process != "전체"
-                else sum(float(value or 0) for value in row.get("공정", {}).values())
+                else self._whole_process_quantity(row)
                 for row in rows if str(row.get("신규분류요약") or "").strip() == category
             )
             for category in categories
@@ -680,7 +688,7 @@ class DueDetailPage(QWidget):
         for category, button in self.classification_buttons.items():
             button.setChecked(category == "전체")
         self.search.clear()
-        target_process = self.fixed_process or "누수규격"
+        target_process = self.fixed_process or "전체"
         for button in self.process_buttons:
             button.setChecked(str(button.property("processName") or "") == target_process)
         default_code = self.PROCESS_DEFAULT_CODE.get(self.fixed_process or "")
@@ -711,15 +719,38 @@ class DueDetailPage(QWidget):
         button = self.process_group.checkedButton()
         return str(button.property("processName")) if button else "누수규격"
 
+    def _whole_process_quantity(self, row: dict) -> float:
+        """현재 화면이 취급하는 공정만 합산한다."""
+        last_process = "포장" if self.include_packaging else "누수규격"
+        visible_processes = PROCESS_ORDER[: PROCESS_ORDER.index(last_process) + 1]
+        process_values = row.get("공정", {})
+        return sum(float(process_values.get(name, 0) or 0) for name in visible_processes)
+
+    def select_process(self, process_name: str) -> bool:
+        """외부 메뉴·KPI에서 공정 필터를 같은 화면에 적용한다."""
+        target = str(process_name or "").strip()
+        for button in self.process_buttons:
+            if str(button.property("processName") or "") != target:
+                continue
+            button.setChecked(True)
+            self.load(self.all_rows)
+            return True
+        return False
+
     def _process_changed(self, *_args: object) -> None:
         """공정 선택에 맞춰 분류별 APS 부족수량과 표를 함께 갱신한다."""
         self.load(self.all_rows)
+        self.process_selected.emit(self._selected_process())
 
     def _update_process_visibility(self) -> None:
         if not hasattr(self, "table"):
             return
         selected = self._selected_process()
-        visible_until = len(PROCESS_ORDER) - 1 if selected == "전체" else PROCESS_ORDER.index(selected)
+        if selected == "전체":
+            last_process = "포장" if self.include_packaging else "누수규격"
+            visible_until = PROCESS_ORDER.index(last_process)
+        else:
+            visible_until = PROCESS_ORDER.index(selected)
         for index, column in enumerate(PROCESS_ORDER):
             self.table.table.setColumnHidden(DUE_DETAIL_COLUMNS.index(column), index > visible_until)
 
@@ -910,6 +941,8 @@ class DueDetailPage(QWidget):
                 continue
             if process != "전체" and float(source.get("공정", {}).get(process, 0) or 0) == 0:
                 continue
+            if process == "전체" and not self.include_packaging and self._whole_process_quantity(source) == 0:
+                continue
             if (
                 hasattr(self, "workable_only")
                 and self.workable_only.isChecked()
@@ -936,6 +969,21 @@ class DueDetailPage(QWidget):
         compact_rows.sort(key=self._row_sort_key)
         return detail_rows, compact_rows
 
+    def export_overview_rows(
+        self, source_rows: list[dict]
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """현재 전체 화면 필터로 상세·수주별·제품별 행을 모두 만든다."""
+        basis = str(self.name_basis.currentData() or "판매")
+        detail_rows, _unused = self.export_rows(source_rows)
+        # export_rows의 전체 화면 기본 품명은 판매명이므로 현재 선택 기준을 다시 적용한다.
+        for row in detail_rows:
+            row["품명"] = row.get(f"품명{basis}") or row.get("품명판매") or ""
+        order_rows = self._group_main_rows(detail_rows, "order", basis)
+        product_rows = self._group_main_rows(detail_rows, "product", basis)
+        order_rows.sort(key=self._row_sort_key)
+        product_rows.sort(key=self._row_sort_key)
+        return detail_rows, order_rows, product_rows
+
     def _apply_filter(self, *_args: object) -> None:
         categories = self._selected_classifications()
         process = self._selected_process()
@@ -946,6 +994,7 @@ class DueDetailPage(QWidget):
         for source in self.all_rows:
             if "전체" not in categories and source.get("신규분류요약") not in categories: continue
             if process != "전체" and float(source.get("공정", {}).get(process, 0) or 0) == 0: continue
+            if process == "전체" and not self.include_packaging and self._whole_process_quantity(source) == 0: continue
             if (
                 hasattr(self, "workable_only")
                 and self.workable_only.isChecked()
@@ -970,7 +1019,12 @@ class DueDetailPage(QWidget):
         rows.sort(key=self._row_sort_key)
         total = len(rows)
         self.filtered_rows_changed.emit(rows)
-        quantity = sum(float(row.get("공정", {}).get(process, 0) or 0) if process != "전체" else sum(float(value or 0) for value in row.get("공정", {}).values()) for row in rows)
+        quantity = sum(
+            float(row.get("공정", {}).get(process, 0) or 0)
+            if process != "전체"
+            else self._whole_process_quantity(row)
+            for row in rows
+        )
         self._filtered_rows = rows
         self._filtered_quantity = quantity
         self._current_page = 0
@@ -1009,7 +1063,8 @@ class ProcessOverviewPage(QWidget):
     process_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None, *, fixed_process: str | None = None,
-                 initial_rows: list[dict] | None = None, monitor_changes: bool = True) -> None:
+                 initial_rows: list[dict] | None = None, monitor_changes: bool = True,
+                 include_packaging: bool = False) -> None:
         super().__init__(parent)
         self.fixed_process = fixed_process
         self.service = ProcessStatusService()
@@ -1020,6 +1075,7 @@ class ProcessOverviewPage(QWidget):
         root.setSpacing(14)
         filters = Card()
         top = QHBoxLayout(filters)
+        self.filter_bar_layout = top
         top.setContentsMargins(16, 12, 16, 12)
         top.setSpacing(9)
         label = QLabel("진행현황"); label.setObjectName("FilterLabel"); top.addWidget(label)
@@ -1041,7 +1097,9 @@ class ProcessOverviewPage(QWidget):
         self.search.setClearButtonEnabled(True); self.search.setPlaceholderText("전체검색: 이니셜·수주번호·품번·품명·POWER / 쉼표(,) OR / * 전체"); self.search.returnPressed.connect(self._apply_market_view); self.search.textChanged.connect(self._top_search_text_changed); top.addWidget(self.search)
         # 갱신 상태는 내부 로직에서 유지하되 상단에는 불필요한 완료 문구를 표시하지 않는다.
         self.status = QLabel("준비", self); self.status.setObjectName("StatusChip"); self.status.hide()
+        top.addWidget(self.status)
         refresh = QPushButton("조회"); refresh.setObjectName("PrimaryButton"); refresh.setIcon(qta.icon("fa6s.magnifying-glass", color="#FFFFFF")); refresh.clicked.connect(self.reload_data); top.addWidget(refresh)
+        self.refresh_button = refresh
         reset = QPushButton("필터 초기화"); reset.setObjectName("SecondaryButton")
         reset.setIcon(qta.icon("fa6s.arrow-rotate-left", color="#52677E"))
         reset.setMinimumWidth(118)
@@ -1049,15 +1107,18 @@ class ProcessOverviewPage(QWidget):
         reset.clicked.connect(self.reset_all_filters)
         self.reset_button = reset
         top.addWidget(reset)
-        if fixed_process:
-            export = QPushButton("엑셀 내보내기")
-            export.setObjectName("SecondaryButton")
-            export.setIcon(qta.icon("fa6s.file-excel", color="#168A45"))
-            export.setMinimumWidth(126)
-            export.setToolTip("현재 필터 결과를 바탕화면에 두 개 시트의 엑셀 파일로 저장합니다.")
-            export.clicked.connect(self._export_excel)
-            self.export_button = export
-            top.addWidget(export)
+        export = QPushButton("엑셀 내보내기")
+        export.setObjectName("SecondaryButton")
+        export.setIcon(qta.icon("fa6s.file-excel", color="#168A45"))
+        export.setMinimumWidth(126)
+        export.setToolTip(
+            "현재 필터 결과를 바탕화면에 두 개 시트의 엑셀 파일로 저장합니다."
+            if fixed_process
+            else "현재 필터 결과를 수주별·제품별·납기별 상세 3개 시트로 저장합니다."
+        )
+        export.clicked.connect(self._export_excel)
+        self.export_button = export
+        top.addWidget(export)
         root.addWidget(filters)
         kpis = QHBoxLayout(); kpis.setSpacing(10)
         self.kpi_all = KpiCard("진행 대상 수주", "#0A7AFF")
@@ -1084,7 +1145,10 @@ class ProcessOverviewPage(QWidget):
         for card in cards:
             card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed); card.setMinimumHeight(98); kpis.addWidget(card)
         root.addLayout(kpis)
-        self.detail_page = DueDetailPage(fixed_process=fixed_process); self.detail_page.reset_requested.connect(self.reset_all_filters); self.detail_page.filtered_rows_changed.connect(self._update_kpis); self.detail_page.search_scope_changed.connect(self._apply_market_view); root.addWidget(self.detail_page, 1)
+        self.detail_page = DueDetailPage(
+            fixed_process=fixed_process,
+            include_packaging=include_packaging,
+        ); self.detail_page.reset_requested.connect(self.reset_all_filters); self.detail_page.filtered_rows_changed.connect(self._update_kpis); self.detail_page.search_scope_changed.connect(self._apply_market_view); root.addWidget(self.detail_page, 1)
         if initial_rows is None:
             self.reload_data()
         else:
@@ -1095,10 +1159,9 @@ class ProcessOverviewPage(QWidget):
         if monitor_changes:
             self.snapshot_timer.start()
 
-    @staticmethod
-    def _signature() -> tuple[int, int] | None:
+    def _signature(self) -> tuple[int, int] | None:
         try:
-            stat = Path(DB_PATH).stat(); return stat.st_size, stat.st_mtime_ns
+            stat = Path(self.service.database_path).stat(); return stat.st_size, stat.st_mtime_ns
         except OSError: return None
 
     @staticmethod
@@ -1208,7 +1271,51 @@ class ProcessOverviewPage(QWidget):
         ]
 
     def _export_excel(self) -> None:
-        if not self.fixed_process or not hasattr(self, "export_button"):
+        if not hasattr(self, "export_button"):
+            return
+        if self.fixed_process:
+            self._export_process_excel(self.fixed_process)
+        else:
+            self._export_overview_excel()
+
+    def _export_overview_excel(self, *, filename_tag: str = "") -> None:
+        """전체 공정 화면을 수주별·제품별·납기별 상세 3시트로 저장한다."""
+        if not hasattr(self, "export_button"):
+            return
+        button = self.export_button
+        original_text = button.text()
+        button.setEnabled(False)
+        button.setText("내보내는 중…")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            source_rows = self._export_master_rows()
+            detail_rows, order_rows, product_rows = self.detail_page.export_overview_rows(
+                source_rows
+            )
+            output = export_overview_workbook(
+                detail_rows,
+                order_rows,
+                product_rows,
+                filename_tag=filename_tag,
+            )
+            button.setText("저장 완료 ✓")
+            button.setToolTip(f"저장 완료: {output}")
+            QTimer.singleShot(2500, lambda: button.setText(original_text))
+        except Exception as exc:
+            button.setText(original_text)
+            show_app_message(
+                self,
+                "엑셀 내보내기 실패",
+                f"엑셀 파일을 만들지 못했습니다.\n\n{exc}",
+                kind="error",
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            button.setEnabled(True)
+
+    def _export_process_excel(self, process: str, *, filename_tag: str = "") -> None:
+        """현재 필터의 지정 공정을 엑셀로 저장한다."""
+        if not hasattr(self, "export_button"):
             return
         button = self.export_button
         original_text = button.text()
@@ -1218,7 +1325,12 @@ class ProcessOverviewPage(QWidget):
         try:
             source_rows = self._export_master_rows()
             detail_rows, compact_rows = self.detail_page.export_rows(source_rows)
-            output = export_process_workbook(self.fixed_process, detail_rows, compact_rows)
+            output = export_process_workbook(
+                process,
+                detail_rows,
+                compact_rows,
+                filename_tag=filename_tag,
+            )
             button.setText("저장 완료 ✓")
             button.setToolTip(f"저장 완료: {output}")
             QTimer.singleShot(2500, lambda: button.setText(original_text))

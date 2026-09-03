@@ -77,6 +77,21 @@ QPushButton#NavButton[active="true"] {
     background: #E8F2FF;
 }
 
+QPushButton#SidebarFoldButton {
+    background: transparent;
+    border: none;
+    border-radius: 9px;
+    padding: 0;
+}
+
+QPushButton#SidebarFoldButton:hover {
+    background: #F1F1F3;
+}
+
+QPushButton#SidebarFoldButton:pressed {
+    background: #E8F2FF;
+}
+
 QPushButton#SubNavButton {
     min-height: 34px;
     padding: 0 12px;
@@ -180,6 +195,43 @@ QPushButton#GlobalRefreshButton:disabled {
     color: #718399;
     background: #F2F6FB;
     border-color: #D7E2EF;
+}
+
+QLabel#LiveCalculationStatus {
+    min-height: 28px;
+    padding: 0 6px;
+    color: #52677E;
+    background: transparent;
+    border: none;
+    font-size: 11px;
+    font-weight: 700;
+}
+
+QLabel#LiveCalculationStatus[status="warning"] {
+    color: #C56A00;
+}
+
+QPushButton#LiveRefreshButton {
+    min-height: 28px;
+    min-width: 86px;
+    padding: 0 11px;
+    color: #FFFFFF;
+    background: #0A7AFF;
+    border: 1px solid #0A7AFF;
+    border-radius: 8px;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+QPushButton#LiveRefreshButton:hover {
+    background: #075CCF;
+    border-color: #075CCF;
+}
+
+QPushButton#LiveRefreshButton:disabled {
+    color: #FFFFFF;
+    background: #A8C9F2;
+    border-color: #A8C9F2;
 }
 
 QLabel#HeaderMeta {
@@ -335,6 +387,25 @@ QLabel#RiskBadge[tone="warning"] {
 QLabel#RiskOrder { color: #183153; font-weight: 800; }
 QLabel#RiskDue { color: #53657D; font-size: 11px; }
 QLabel#RiskDetail { color: #66778E; font-size: 11px; }
+
+QLabel#RiskCompletionBadge {
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+QLabel#RiskCompletionBadge[state="complete"] {
+    color: #087A55;
+    background: #EAFBF4;
+    border: 1px solid #9FDDC6;
+}
+
+QLabel#RiskCompletionBadge[state="active"] {
+    color: #0A67D1;
+    background: #EEF6FF;
+    border: 1px solid #BDD9F7;
+}
 
 QScrollArea#RiskScrollArea,
 QWidget#RiskListWidget {

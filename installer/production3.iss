@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "0.1.20"
+#define MyAppVersion "0.1.21"
 #define MyAppExeName "gui_app_pyside6.exe"
 #define MySourceDir "..\dist\production3"
 
@@ -123,21 +123,43 @@ begin
   DataDirPage.Values[0] := SavedDataRoot();
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep = ssPostInstall then
-  begin
-    RegWriteStringValue(HKCU, RegistryPath, DataRootValue, DataDirPage.Values[0]);
-    RegWriteStringValue(HKCU, RegistryPath, ManagementApiUrlValue, ManagementApiUrl);
-  end;
-end;
-
 function SafeDataRoot(const PathValue: String): Boolean;
 var
   Expanded: String;
 begin
   Expanded := RemoveBackslashUnlessRoot(ExpandFileName(PathValue));
   Result := (Length(Expanded) > 3) and (ExtractFileDrive(Expanded) + '\' <> Expanded);
+end;
+
+procedure EnsureDataDirectories(const DataRoot: String);
+var
+  Root: String;
+begin
+  if not SafeDataRoot(DataRoot) then
+    Exit;
+  Root := AddBackslash(DataRoot);
+  ForceDirectories(Root + 'bom\snapshot');
+  ForceDirectories(Root + 'bom\backup');
+  ForceDirectories(Root + 'bom\raw_api');
+  ForceDirectories(Root + 'process-status\snapshot');
+  ForceDirectories(Root + 'process-status\backup');
+  ForceDirectories(Root + 'process-status\raw_api');
+  ForceDirectories(Root + 'production-performance\snapshot');
+  ForceDirectories(Root + 'production-performance\backup');
+  ForceDirectories(Root + 'production-performance\raw_api');
+  ForceDirectories(Root + 'live-production-need\snapshot');
+  ForceDirectories(Root + 'live-production-need\backup');
+  ForceDirectories(Root + 'settings');
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    RegWriteStringValue(HKCU, RegistryPath, DataRootValue, DataDirPage.Values[0]);
+    RegWriteStringValue(HKCU, RegistryPath, ManagementApiUrlValue, ManagementApiUrl);
+    EnsureDataDirectories(DataDirPage.Values[0]);
+  end;
 end;
 
 procedure DeleteAppOwnedData(const DataRoot: String);
@@ -147,6 +169,7 @@ begin
   DelTree(AddBackslash(DataRoot) + 'bom', True, True, True);
   DelTree(AddBackslash(DataRoot) + 'process-status', True, True, True);
   DelTree(AddBackslash(DataRoot) + 'production-performance', True, True, True);
+  DelTree(AddBackslash(DataRoot) + 'live-production-need', True, True, True);
   DelTree(AddBackslash(DataRoot) + 'aps', True, True, True);
   DelTree(AddBackslash(DataRoot) + 'item-codes', True, True, True);
   DelTree(AddBackslash(DataRoot) + 'settings', True, True, True);
