@@ -34,6 +34,30 @@ QLabel#SidebarSection {
     padding: 0 7px 3px 7px;
 }
 
+QScrollArea#SidebarMenuScroll,
+QScrollArea#SidebarMenuScroll > QWidget,
+QWidget#SidebarMenuBody {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#SidebarMenuScroll QScrollBar:vertical {
+    width: 7px;
+    margin: 2px 0;
+    background: transparent;
+}
+
+QScrollArea#SidebarMenuScroll QScrollBar::handle:vertical {
+    min-height: 28px;
+    border-radius: 3px;
+    background: #CDD7E3;
+}
+
+QScrollArea#SidebarMenuScroll QScrollBar::add-line:vertical,
+QScrollArea#SidebarMenuScroll QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
 QLabel#BrandBadge {
     color: #FFFFFF;
     background: #0A7AFF;

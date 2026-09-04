@@ -1813,10 +1813,12 @@ class BomStatusPage(QWidget):
         preview_title.setObjectName("SalineLeadPreviewTitle")
         preview_badge = QLabel("미리보기")
         preview_badge.setObjectName("SalineLeadPreviewBadge")
-        self.lead_preview_zoom_out_button = QPushButton("-")
-        self.lead_preview_zoom_in_button = QPushButton("+")
-        self.lead_preview_reset_button = QPushButton("기본 보기")
-        self.lead_preview_save_button = QPushButton("위치 저장")
+        # 초기 화면을 만드는 동안 show()가 독립 창을 띄우지 않도록
+        # 미리보기 버튼은 처음부터 카드에 귀속한다.
+        self.lead_preview_zoom_out_button = QPushButton("-", preview_frame)
+        self.lead_preview_zoom_in_button = QPushButton("+", preview_frame)
+        self.lead_preview_reset_button = QPushButton("기본 보기", preview_frame)
+        self.lead_preview_save_button = QPushButton("위치 저장", preview_frame)
         self.lead_preview_zoom_out_button.hide()
         self.lead_preview_zoom_in_button.hide()
         self.lead_preview_reset_button.show()

@@ -20,6 +20,11 @@ def _clock_time(value: object) -> str:
     return display[11:16] if len(display) >= 16 else display
 
 
+def _date_clock_time(value: object) -> str:
+    display = _display_time(value)
+    return display[:16] if len(display) >= 16 else display
+
+
 class LiveProductionNeedPage(ProcessOverviewPage):
     """APS 공정 화면과 같은 UI에 실적 반영 결과만 연결한 화면."""
 
@@ -135,9 +140,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
                 f"감지한 새 APS {attempted_aps}"
             )
         elif state == "success":
-            target.setText(
-                f"APS {_clock_time(aps_time)} 반영 완료 · 계산 {_clock_time(calculated)}"
-            )
+            target.setText(f"계산 완료  {_date_clock_time(calculated)}")
             target.setProperty("status", "success")
             target.setToolTip(
                 f"APS 기준 {aps_time}\n"

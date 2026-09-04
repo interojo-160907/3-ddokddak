@@ -251,6 +251,49 @@ def build_overview_export_payload(
     }
 
 
+def build_lot_work_order_export_payload(
+    process: str | None,
+    rows: list[dict],
+    columns: list[str] | tuple[str, ...],
+    *,
+    header_labels: dict[str, str] | None = None,
+    hidden_columns: list[str] | tuple[str, ...] = (),
+    note: str = "",
+) -> dict:
+    """현재 LOT 작업순서 표의 표시 순서와 숨김 상태를 그대로 내보낸다."""
+    labels = dict(header_labels or {})
+    source_columns = [str(column) for column in columns]
+    export_columns = [str(labels.get(column, column)) for column in source_columns]
+    hidden_sources = {str(column) for column in hidden_columns}
+    export_rows: list[list[object]] = []
+    for row in rows:
+        values: list[object] = []
+        for source, header in zip(source_columns, export_columns):
+            value = row.get(source, "")
+            values.append(_number(value) if "수량" in header else str(value or ""))
+        export_rows.append(values)
+
+    process_label = PROCESS_EXPORT_NAME.get(str(process or ""), "전체")
+    title = f"{datetime.now():%y%m%d} LOT 작업 순서 · {process_label}"
+    return {
+        "title": title,
+        "subject": "생산3팀 LOT 작업 순서",
+        "note": note or "현재 화면의 필터·정렬·열 접기 상태 기준",
+        "sheets": [
+            {
+                "name": f"LOT작업순서_{process_label}",
+                "columns": export_columns,
+                "rows": export_rows,
+                "hiddenColumns": [
+                    labels.get(column, column)
+                    for column in source_columns
+                    if column in hidden_sources
+                ],
+            }
+        ],
+    }
+
+
 def _windows_user_folder(value_name: str, fallback: Path) -> Path:
     if os.name != "nt":
         return fallback
@@ -282,6 +325,13 @@ def desktop_overview_export_path(*, filename_tag: str = "") -> Path:
     tag = str(filename_tag or "").strip()
     label = "실시간실적반영" if tag else "공정현황_APS"
     return desktop / f"{datetime.now():%y%m%d}_{label}.xlsx"
+
+
+def desktop_lot_work_order_export_path(process: str | None = None) -> Path:
+    desktop = _windows_user_folder("Desktop", Path.home() / "Desktop")
+    desktop.mkdir(parents=True, exist_ok=True)
+    process_label = PROCESS_EXPORT_NAME.get(str(process or ""), "전체")
+    return desktop / f"{datetime.now():%y%m%d}_LOT작업순서_{process_label}.xlsx"
 
 
 def _available_output_path(output_path: Path) -> Path:
@@ -433,7 +483,7 @@ def _write_workbook(output_path: Path, payload: dict) -> None:
     with xlsxwriter.Workbook(str(output_path)) as workbook:
         workbook.set_properties({
             "title": str(payload.get("title") or "똑딱이 공정 현황"),
-            "subject": "생산3팀 공정 현황",
+            "subject": str(payload.get("subject") or "생산3팀 공정 현황"),
             "author": "생산기획팀 RD",
             "company": "Interojo",
         })
@@ -497,6 +547,42 @@ def export_overview_workbook(
         filename_tag=filename_tag,
     )
     temporary_output = Path(tempfile.gettempdir()) / f"ddokddak_overview_{uuid.uuid4().hex}.xlsx"
+    try:
+        _write_workbook(temporary_output, payload)
+        os.replace(temporary_output, output)
+        return output
+    finally:
+        temporary_output.unlink(missing_ok=True)
+
+
+def export_lot_work_order_workbook(
+    process: str | None,
+    rows: list[dict],
+    columns: list[str] | tuple[str, ...],
+    *,
+    header_labels: dict[str, str] | None = None,
+    hidden_columns: list[str] | tuple[str, ...] = (),
+    note: str = "",
+    output_path: Path | None = None,
+) -> Path:
+    requested_output = (
+        Path(output_path)
+        if output_path
+        else desktop_lot_work_order_export_path(process)
+    ).resolve()
+    output = _available_output_path(requested_output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_lot_work_order_export_payload(
+        process,
+        rows,
+        columns,
+        header_labels=header_labels,
+        hidden_columns=hidden_columns,
+        note=note,
+    )
+    temporary_output = Path(tempfile.gettempdir()) / (
+        f"ddokddak_lot_work_order_{uuid.uuid4().hex}.xlsx"
+    )
     try:
         _write_workbook(temporary_output, payload)
         os.replace(temporary_output, output)

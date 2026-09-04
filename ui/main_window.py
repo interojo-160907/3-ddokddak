@@ -111,6 +111,7 @@ from ui.notice_ticker import NoticeTicker
 from ui.permission_dialog import show_permission_denied
 from ui.process_overview_page import ProcessOverviewPage
 from ui.live_production_need_page import LiveProductionNeedPage
+from ui.lot_work_order_page import LotWorkOrderPage
 from ui.update_flow_dialog import show_required_update
 
 
@@ -140,6 +141,12 @@ PAGES = (
         "실시간 실적 반영",
         "마지막 APS 부족량에서 이후 완료된 생산과 공정창고 입고를 반영한 현재 필요수량입니다.",
         "APS 회차 기준  ·  1시간·수동 갱신",
+    ),
+    PageDefinition(
+        "lot_work_order",
+        "LOT 작업 순서",
+        "공정별 재공 LOT의 다음 작업 순서와 배정 결과를 확인합니다.",
+        "WIP · BOM MAP · 현재 필요수량",
     ),
     PageDefinition("injection", "사출 공정", "사출 공정의 생산계획과 최근 실적, 납기 위험을 확인합니다.", "공정 현황"),
     PageDefinition("separation", "분리 공정", "분리 공정의 생산계획과 최근 실적, 납기 위험을 확인합니다.", "공정 현황"),
@@ -1203,6 +1210,20 @@ class MainWindow(QMainWindow):
         "live_inspection": "검사·접착 공정",
         "live_leak": "누수·규격 공정",
     }
+    LOT_PROCESS_NAV = {
+        "lot_injection": "사출",
+        "lot_separation": "분리",
+        "lot_hydration": "하이드레이션",
+        "lot_inspection": "접착",
+        "lot_leak": "누수규격",
+    }
+    LOT_PROCESS_TITLES = {
+        "lot_injection": "LOT 작업 순서 · 사출",
+        "lot_separation": "LOT 작업 순서 · 분리",
+        "lot_hydration": "LOT 작업 순서 · 하이드레이션",
+        "lot_inspection": "LOT 작업 순서 · 검사·접착",
+        "lot_leak": "LOT 작업 순서 · 누수·규격",
+    }
 
     def __init__(self, management_notices: list[dict[str, Any]] | tuple[dict[str, Any], ...] = ()) -> None:
         super().__init__()
@@ -1318,6 +1339,10 @@ class MainWindow(QMainWindow):
             self._reload_changed_data_views(changed)
         else:
             self.dashboard_data = self.dashboard_service.load()
+            if hasattr(self, "live_need_page"):
+                self.live_need_page._show_cycle_status()
+            if hasattr(self, "lot_work_order_page"):
+                self.lot_work_order_page.refresh_calculation_status()
             self._refresh_settings_data_status()
             self._refresh_header_status()
 
@@ -1344,8 +1369,20 @@ class MainWindow(QMainWindow):
             self.live_need_page.reload_data()
             for page in getattr(self, "live_fixed_process_pages", {}).values():
                 page.reload_data()
+            if hasattr(self, "lot_work_order_page"):
+                self.lot_work_order_page.refresh_calculation_status()
+            for page in getattr(self, "lot_fixed_process_pages", {}).values():
+                page.reload_data()
+        elif "production" in changed:
+            # 사출 작업순서는 생산실적 DB의 진행 중 체크시트(LOT)를 사용한다.
+            injection_page = getattr(self, "lot_fixed_process_pages", {}).get("lot_injection")
+            if injection_page is not None:
+                injection_page.reload_data()
         if "bom" in changed and hasattr(self, "bom_page"):
             self.bom_page.refresh()
+            injection_page = getattr(self, "lot_fixed_process_pages", {}).get("lot_injection")
+            if injection_page is not None:
+                injection_page.reload_data()
         self._refresh_settings_data_status()
         self._refresh_header_status()
 
@@ -1422,8 +1459,26 @@ class MainWindow(QMainWindow):
         menu_label.setObjectName("SidebarSection")
         side_layout.addWidget(menu_label)
 
-        self._add_nav(side_layout, "dashboard", "대시보드", "fa6s.table-cells-large")
-        self._add_nav(side_layout, "process_overview", "공정 현황(APS)", "fa6s.layer-group")
+        # 브랜드와 하단 설정/버전은 고정하고 업무 메뉴 영역만 스크롤한다.
+        self.sidebar_menu_scroll = QScrollArea()
+        self.sidebar_menu_scroll.setObjectName("SidebarMenuScroll")
+        self.sidebar_menu_scroll.setWidgetResizable(True)
+        self.sidebar_menu_scroll.setFrameShape(QFrame.NoFrame)
+        self.sidebar_menu_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.sidebar_menu_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.sidebar_menu_scroll.setFocusPolicy(Qt.NoFocus)
+        self.sidebar_menu_scroll.setAutoFillBackground(False)
+        self.sidebar_menu_scroll.viewport().setAutoFillBackground(False)
+        sidebar_menu_body = QWidget()
+        sidebar_menu_body.setObjectName("SidebarMenuBody")
+        menu_layout = QVBoxLayout(sidebar_menu_body)
+        menu_layout.setContentsMargins(0, 0, 0, 0)
+        menu_layout.setSpacing(7)
+        self.sidebar_menu_scroll.setWidget(sidebar_menu_body)
+        side_layout.addWidget(self.sidebar_menu_scroll, 1)
+
+        self._add_nav(menu_layout, "dashboard", "대시보드", "fa6s.table-cells-large")
+        self._add_nav(menu_layout, "process_overview", "공정 현황(APS)", "fa6s.layer-group")
         self.process_container = QWidget()
         process_layout = QVBoxLayout(self.process_container)
         process_layout.setContentsMargins(14, 0, 0, 0)
@@ -1437,7 +1492,7 @@ class MainWindow(QMainWindow):
         )
         for key, title, icon in process_items:
             self._add_nav(process_layout, key, title, icon, compact=True)
-        side_layout.addWidget(self.process_container)
+        menu_layout.addWidget(self.process_container)
 
         live_nav_row = QWidget()
         live_nav_row.setObjectName("LiveNavRow")
@@ -1453,7 +1508,7 @@ class MainWindow(QMainWindow):
         self.live_process_toggle.setAccessibleName("실시간 실적 반영 내부 공정 펼치기")
         self.live_process_toggle.clicked.connect(self._toggle_live_process_container)
         live_nav_layout.addWidget(self.live_process_toggle)
-        side_layout.addWidget(live_nav_row)
+        menu_layout.addWidget(live_nav_row)
         self.live_process_container = QWidget()
         live_process_layout = QVBoxLayout(self.live_process_container)
         live_process_layout.setContentsMargins(14, 0, 0, 0)
@@ -1466,11 +1521,41 @@ class MainWindow(QMainWindow):
             ("live_leak", "누수·규격", "fa6s.ruler-combined"),
         ):
             self._add_nav(live_process_layout, key, title, icon, compact=True)
-        side_layout.addWidget(self.live_process_container)
+        menu_layout.addWidget(self.live_process_container)
         self._set_live_process_expanded(False)
 
-        self._add_nav(side_layout, "bom", "BOM 현황", "fa6s.diagram-project")
-        side_layout.addStretch()
+        lot_nav_row = QWidget()
+        lot_nav_row.setObjectName("LotNavRow")
+        lot_nav_layout = QHBoxLayout(lot_nav_row)
+        lot_nav_layout.setContentsMargins(0, 0, 0, 0)
+        lot_nav_layout.setSpacing(2)
+        self._add_nav(lot_nav_layout, "lot_work_order", "LOT 작업 순서", "fa6s.list-ol")
+        self.lot_process_toggle = QPushButton()
+        self.lot_process_toggle.setObjectName("SidebarFoldButton")
+        self.lot_process_toggle.setCursor(Qt.PointingHandCursor)
+        self.lot_process_toggle.setFixedSize(36, 42)
+        self.lot_process_toggle.setIconSize(QSize(11, 11))
+        self.lot_process_toggle.setAccessibleName("LOT 작업 순서 내부 공정 펼치기")
+        self.lot_process_toggle.clicked.connect(self._toggle_lot_process_container)
+        lot_nav_layout.addWidget(self.lot_process_toggle)
+        menu_layout.addWidget(lot_nav_row)
+        self.lot_process_container = QWidget()
+        lot_process_layout = QVBoxLayout(self.lot_process_container)
+        lot_process_layout.setContentsMargins(14, 0, 0, 0)
+        lot_process_layout.setSpacing(2)
+        for key, title, icon in (
+            ("lot_injection", "사출", "fa6s.gears"),
+            ("lot_separation", "분리", "fa6s.code-branch"),
+            ("lot_hydration", "하이드레이션", "fa6s.droplet"),
+            ("lot_inspection", "검사·접착", "fa6s.magnifying-glass"),
+            ("lot_leak", "누수·규격", "fa6s.ruler-combined"),
+        ):
+            self._add_nav(lot_process_layout, key, title, icon, compact=True)
+        menu_layout.addWidget(self.lot_process_container)
+        self._set_lot_process_expanded(False)
+
+        self._add_nav(menu_layout, "bom", "BOM 현황", "fa6s.diagram-project")
+        menu_layout.addStretch()
 
         self._add_nav(side_layout, "settings", "설정 및 운영", "fa6s.gear")
         self.sidebar_status = QLabel(
@@ -1559,6 +1644,15 @@ class MainWindow(QMainWindow):
         self.live_header_row_layout.addStretch()
         self.live_header_row.setVisible(False)
         header_actions_layout.addWidget(self.live_header_row)
+
+        self.lot_header_row = QWidget()
+        self.lot_header_row.setObjectName("LotHeaderRow")
+        self.lot_header_row_layout = QHBoxLayout(self.lot_header_row)
+        self.lot_header_row_layout.setContentsMargins(0, 0, 0, 0)
+        self.lot_header_row_layout.setSpacing(6)
+        self.lot_header_row_layout.addStretch()
+        self.lot_header_row.setVisible(False)
+        header_actions_layout.addWidget(self.lot_header_row)
         header.addWidget(self.header_actions, 0, Qt.AlignRight | Qt.AlignTop)
         content_layout.addWidget(self.global_header)
 
@@ -1573,6 +1667,12 @@ class MainWindow(QMainWindow):
         for key, process_name in self.LIVE_PROCESS_NAV.items():
             page = self._build_live_process_page(process_name)
             self.live_fixed_process_pages[key] = page
+            self._add_page(key, page)
+        self._add_page("lot_work_order", self._build_lot_work_order_page())
+        self.lot_fixed_process_pages = {}
+        for key, process_name in self.LOT_PROCESS_NAV.items():
+            page = self._build_lot_process_page(process_name)
+            self.lot_fixed_process_pages[key] = page
             self._add_page(key, page)
         self._add_page("bom", self._build_bom_page())
         self._add_page("settings", self._build_settings_page())
@@ -1600,6 +1700,8 @@ class MainWindow(QMainWindow):
     def _handle_sidebar_navigation(self, page_key: str) -> None:
         if page_key == "live_need":
             self._set_live_process_expanded(True)
+        elif page_key == "lot_work_order":
+            self._set_lot_process_expanded(True)
         self.show_page(page_key)
 
     def _toggle_live_process_container(self) -> None:
@@ -1616,6 +1718,21 @@ class MainWindow(QMainWindow):
         self.live_process_toggle.setProperty("expanded", self.live_process_expanded)
         self.live_process_toggle.style().unpolish(self.live_process_toggle)
         self.live_process_toggle.style().polish(self.live_process_toggle)
+
+    def _toggle_lot_process_container(self) -> None:
+        self._set_lot_process_expanded(not self.lot_process_expanded)
+
+    def _set_lot_process_expanded(self, expanded: bool) -> None:
+        self.lot_process_expanded = bool(expanded)
+        self.lot_process_container.setVisible(self.lot_process_expanded)
+        icon_name = "fa6s.chevron-down" if self.lot_process_expanded else "fa6s.chevron-right"
+        action = "접기" if self.lot_process_expanded else "펼치기"
+        self.lot_process_toggle.setIcon(qta.icon(icon_name, color="#64748B"))
+        self.lot_process_toggle.setToolTip(f"LOT 작업 순서 내부 공정 {action}")
+        self.lot_process_toggle.setAccessibleName(f"LOT 작업 순서 내부 공정 {action}")
+        self.lot_process_toggle.setProperty("expanded", self.lot_process_expanded)
+        self.lot_process_toggle.style().unpolish(self.lot_process_toggle)
+        self.lot_process_toggle.style().polish(self.lot_process_toggle)
 
     def closeEvent(self, event) -> None:
         if self._force_close:
@@ -1783,19 +1900,32 @@ class MainWindow(QMainWindow):
     def show_page(self, key: str) -> None:
         requested_key = key
         actual_key = key
-        definition_key = "live_need" if key in self.LIVE_PROCESS_NAV else key
+        definition_key = (
+            "live_need" if key in self.LIVE_PROCESS_NAV
+            else "lot_work_order" if key in self.LOT_PROCESS_NAV
+            else key
+        )
         definition = self.page_definitions[definition_key]
         self._current_page = actual_key
         self._active_nav_key = requested_key
         self.stack.setCurrentIndex(self.page_indexes[actual_key])
         self.header_kicker.setText(definition.kicker.upper())
         self.header_title.setText(
-            self.LIVE_PROCESS_TITLES.get(requested_key, definition.title)
+            self.LIVE_PROCESS_TITLES.get(
+                requested_key,
+                self.LOT_PROCESS_TITLES.get(requested_key, definition.title),
+            )
         )
         self.header_description.setText(definition.description)
         dashboard_header = actual_key == "dashboard"
-        compact_process_header = actual_key == "process_overview" or actual_key in self.PROCESS_KEYS
+        compact_process_header = (
+            actual_key == "process_overview"
+            or actual_key in self.PROCESS_KEYS
+            or actual_key == "lot_work_order"
+            or actual_key in self.LOT_PROCESS_NAV
+        )
         live_header = actual_key == "live_need" or actual_key in self.LIVE_PROCESS_NAV
+        lot_header = actual_key == "lot_work_order" or actual_key in self.LOT_PROCESS_NAV
         page_owns_header = actual_key == "dashboard"
         self.header_kicker.setVisible(False)
         self.header_title.setVisible(not page_owns_header)
@@ -1803,7 +1933,10 @@ class MainWindow(QMainWindow):
         self.header_meta.setVisible(True)
         self.data_status.setVisible(True)
         self.live_header_row.setVisible(live_header)
-        self.global_header.setFixedHeight(70 if live_header else 36)
+        self.lot_header_row.setVisible(lot_header)
+        self.global_header.setFixedHeight(70 if live_header or lot_header else 36)
+        if lot_header and hasattr(self, "lot_work_order_page"):
+            self.lot_work_order_page.refresh_calculation_status()
         if dashboard_header:
             self.global_header_layout.setContentsMargins(0, 0, 0, 0)
             self.content_layout.setContentsMargins(32, 14, 32, 18)
@@ -1828,6 +1961,7 @@ class MainWindow(QMainWindow):
         aps_fresh = self.dashboard_data.get("aps_status", {}).get("source_refreshed_at") or "-"
         if (
             self._current_page == "live_need" or self._current_page in self.LIVE_PROCESS_NAV
+            or self._current_page == "lot_work_order" or self._current_page in self.LOT_PROCESS_NAV
         ) and hasattr(self, "live_need_page"):
             aps_fresh = self.live_need_page.service.status().get("aps_source_refreshed_at") or aps_fresh
         self.header_meta.setText(f"APS 갱신  {aps_fresh}")
@@ -3037,6 +3171,30 @@ class MainWindow(QMainWindow):
 
     def _build_live_process_page(self, process_name: str) -> QWidget:
         page = LiveProductionNeedPage(fixed_process=process_name)
+        page.refresh_requested.connect(lambda: self._start_data_collection("live"))
+        page.process_requested.connect(self.show_page)
+        return page
+
+    def _build_lot_work_order_page(self) -> QWidget:
+        self.lot_work_order_page = LotWorkOrderPage()
+        self.lot_work_order_page.refresh_requested.connect(
+            lambda: self._start_data_collection("live")
+        )
+        self.lot_work_order_page.process_requested.connect(self.show_page)
+        self.lot_header_row_layout.addWidget(
+            self.lot_work_order_page.calculation_status,
+            0,
+            Qt.AlignRight | Qt.AlignVCenter,
+        )
+        self.lot_header_row_layout.addWidget(
+            self.lot_work_order_page.lot_refresh_button,
+            0,
+            Qt.AlignRight | Qt.AlignVCenter,
+        )
+        return self.lot_work_order_page
+
+    def _build_lot_process_page(self, process_name: str) -> QWidget:
+        page = LotWorkOrderPage(fixed_process=process_name)
         page.refresh_requested.connect(lambda: self._start_data_collection("live"))
         page.process_requested.connect(self.show_page)
         return page
@@ -5121,6 +5279,12 @@ class MainWindow(QMainWindow):
             page.reset_all_filters()
         for page in getattr(self, "fixed_process_pages", {}).values():
             page.reset_all_filters()
+        if hasattr(self, "lot_work_order_page"):
+            self.lot_work_order_page.reset_all_filters()
+            self.lot_work_order_page.refresh_calculation_status()
+        for page in getattr(self, "lot_fixed_process_pages", {}).values():
+            page.reset_all_filters()
+            page.refresh_calculation_status()
         bom_page = getattr(self, "bom_page", None)
         if bom_page is not None:
             for method_name in (
@@ -5156,6 +5320,8 @@ class MainWindow(QMainWindow):
                 self.settings_data_status.setText("다른 데이터 수집이 진행 중입니다. 완료 후 다시 실행해 주세요.")
             if source == "live" and hasattr(self, "live_need_page"):
                 self.live_need_page.set_refreshing(False)
+            if source == "live" and hasattr(self, "lot_work_order_page"):
+                self.lot_work_order_page.set_refreshing(False)
             return
         scripts = {
             "all": "refresh_all.py",
@@ -5251,6 +5417,8 @@ class MainWindow(QMainWindow):
             controls["manual"].setText("수집 중…" if busy and key == source else "지금 갱신")
         if hasattr(self, "live_need_page"):
             self.live_need_page.set_refreshing(busy and source == "live")
+        if hasattr(self, "lot_work_order_page"):
+            self.lot_work_order_page.set_refreshing(busy and source == "live")
 
     def _capture_collection_output(self) -> None:
         process = getattr(self, "settings_collection_process", None)

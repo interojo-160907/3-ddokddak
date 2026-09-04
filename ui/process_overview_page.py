@@ -95,6 +95,7 @@ class KpiCard(Card):
         dot.setStyleSheet(f"color:{color}")
         label = QLabel(title)
         label.setObjectName("kpiTitle")
+        self.title_label = label
         row.addWidget(dot)
         row.addWidget(label)
         row.addStretch()
@@ -141,6 +142,7 @@ class RowTableModel(QAbstractTableModel):
         super().__init__(parent)
         self.columns = columns
         self.rows: list[dict] = []
+        self.header_labels: dict[str, str] = {}
 
     def rowCount(self, _parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
         return len(self.rows)
@@ -150,7 +152,8 @@ class RowTableModel(QAbstractTableModel):
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole):  # noqa: N802
         if role == Qt.DisplayRole and orientation == Qt.Horizontal and 0 <= section < len(self.columns):
-            return self.columns[section]
+            column = self.columns[section]
+            return self.header_labels.get(column, column)
         return super().headerData(section, orientation, role)
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
@@ -169,6 +172,12 @@ class RowTableModel(QAbstractTableModel):
             if remark:
                 return f"{order_text}\n비고: {remark}"
             return order_text or None
+        if role == Qt.ToolTipRole and column == "납기일" and row.get("_납기별필요"):
+            return "\n".join(
+                f"{detail.get('납기일') or '납기 미확인'} · "
+                f"{format_number(float(detail.get('필요수량') or 0))} pcs"
+                for detail in row["_납기별필요"]
+            )
         if role == Qt.ToolTipRole and column in {"신규분류요약", "수주번호", "품명", "T코드", "P코드", "Q코드", "R코드"}:
             return str(value or "") or None
         if role == Qt.UserRole:
@@ -190,6 +199,13 @@ class RowTableModel(QAbstractTableModel):
             self.index(0, column), self.index(len(self.rows) - 1, column),
             [Qt.DisplayRole, Qt.ToolTipRole],
         )
+
+    def set_header_label(self, column_name: str, label: str) -> None:
+        if column_name not in self.columns:
+            return
+        self.header_labels[column_name] = label
+        column = self.columns.index(column_name)
+        self.headerDataChanged.emit(Qt.Horizontal, column, column)
 
 
 class DataTable(Card):
@@ -505,7 +521,7 @@ class DueDetailPage(QWidget):
             display_row.addWidget(button)
         if fixed_process:
             display_row.addSpacing(8)
-            self.workable_only = QCheckBox("작업 가능만")
+            self.workable_only = QCheckBox("작업 가능만", self)
             self.workable_only.setToolTip(
                 "직전 공정 부족수량이 0인 항목만 표시합니다."
                 if fixed_process in self.PREVIOUS_PROCESS
@@ -514,7 +530,7 @@ class DueDetailPage(QWidget):
             self.workable_only.setVisible(fixed_process in self.PREVIOUS_PROCESS)
             self.workable_only.stateChanged.connect(self._apply_filter)
             display_row.addWidget(self.workable_only)
-            self.compact_view = QCheckBox("간략히 보기")
+            self.compact_view = QCheckBox("간략히 보기", self)
             compact_code = self.PROCESS_DEFAULT_CODE.get(fixed_process, "현재 공정코드")
             self.compact_view.setToolTip(
                 f"표시 코드 체크와 관계없이 {fixed_process}은(는) {compact_code}가 같은 행을 합치고 "
@@ -574,7 +590,9 @@ class DueDetailPage(QWidget):
         layout.addWidget(filters)
         self.table = DataTable("납기별 상세", DUE_DETAIL_COLUMNS, DUE_DETAIL_WIDTHS, "품명", False)
         layout.addWidget(self.table, 1)
-        self.pagination_bar = QWidget()
+        # 부모가 없는 상태에서 setVisible(True)를 호출하면 시작 중 잠깐
+        # 독립된 빈 창으로 노출된다. 생성 시점부터 상세 페이지에 귀속한다.
+        self.pagination_bar = QWidget(self)
         pagination_layout = QHBoxLayout(self.pagination_bar)
         pagination_layout.setContentsMargins(0, 0, 0, 0)
         pagination_layout.setSpacing(8)

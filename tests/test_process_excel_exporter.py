@@ -7,7 +7,9 @@ import zipfile
 from pathlib import Path
 
 from services.process_excel_exporter import (
+    build_lot_work_order_export_payload,
     build_overview_export_payload,
+    export_lot_work_order_workbook,
     export_overview_workbook,
 )
 
@@ -94,6 +96,62 @@ class OverviewExcelExporterTest(unittest.TestCase):
                 )
                 self.assertEqual(hidden_count, 7)
                 self.assertTrue(all(int(column.attrib["min"]) >= 15 for column in hidden))
+
+
+class LotWorkOrderExcelExporterTest(unittest.TestCase):
+    def test_payload_keeps_visible_order_dynamic_headers_and_hidden_columns(self) -> None:
+        rows = [{
+            "구분": "추가사출",
+            "현재위치": "사출 필요",
+            "신규분류요약": "1-Day_Sph",
+            "R코드": "R0001-01.00",
+            "Q코드": "Q0001-01.00",
+            "재고수량": 4906,
+        }]
+        columns = [
+            "구분", "현재위치", "신규분류요약", "R코드", "Q코드", "재고수량",
+        ]
+        payload = build_lot_work_order_export_payload(
+            "사출",
+            rows,
+            columns,
+            header_labels={"재고수량": "필요수량"},
+            hidden_columns=["Q코드"],
+        )
+        sheet = payload["sheets"][0]
+        self.assertEqual(payload["subject"], "생산3팀 LOT 작업 순서")
+        self.assertEqual(sheet["name"], "LOT작업순서_사출")
+        self.assertEqual(sheet["columns"], [
+            "구분", "현재위치", "신규분류요약", "R코드", "Q코드", "필요수량",
+        ])
+        self.assertEqual(sheet["hiddenColumns"], ["Q코드"])
+        self.assertEqual(sheet["rows"][0][-1], 4906)
+
+    def test_workbook_has_lot_specific_sheet_and_hidden_folded_code(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "260904_LOT작업순서_분리.xlsx"
+            export_lot_work_order_workbook(
+                "분리",
+                [{"현재위치": "사출창고", "R코드": "R0001", "Q코드": "Q0001", "재고수량": 100}],
+                ["현재위치", "R코드", "Q코드", "재고수량"],
+                hidden_columns=["Q코드"],
+                output_path=output,
+            )
+            self.assertTrue(output.is_file())
+            with zipfile.ZipFile(output) as archive:
+                workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+                names = [
+                    sheet.attrib["name"]
+                    for sheet in workbook.findall(
+                        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"
+                    )
+                ]
+                self.assertEqual(names, ["LOT작업순서_분리"])
+                sheet_xml = ET.fromstring(archive.read("xl/worksheets/sheet1.xml"))
+                hidden = sheet_xml.findall(
+                    ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}col[@hidden='1']"
+                )
+                self.assertEqual(len(hidden), 1)
 
 
 if __name__ == "__main__":
