@@ -109,7 +109,6 @@ class LiveProductionNeedPage(ProcessOverviewPage):
     def reload_data(self) -> None:
         super().reload_data()
         self._show_cycle_status()
-        self.set_refreshing(False)
 
     def _apply_market_view(self) -> None:
         super()._apply_market_view()

@@ -18,6 +18,8 @@ from collectors.live_production_need_collector import (
     allocation_priority,
     calculate_completion_evidence,
     lot_identity,
+    probe_wip_source,
+    refresh,
 )
 
 
@@ -299,6 +301,101 @@ class LiveNeedCalculationTest(unittest.TestCase):
         self.assertEqual(captured["stts"], "C")
         self.assertEqual(source_count, 4)
         self.assertEqual([row["row_key"] for row in rows], ["P1"])
+
+    def test_wip_probe_requires_one_common_cycle_for_all_five_warehouses(self) -> None:
+        calls: list[tuple[str, bool]] = []
+
+        def fake_request(endpoint, params, api_key, timeout, **kwargs):
+            calls.append((str(params.get("wh_name")), bool(kwargs.get("allow_truncated"))))
+            return {
+                "source_refreshed_at": "2026-09-04 16:10:53",
+                "total_count": 100,
+                "rows": [{}],
+                "truncated": True,
+            }
+
+        with patch(
+            "collectors.live_production_need_collector._request",
+            side_effect=fake_request,
+        ):
+            result = probe_wip_source("", 10)
+
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["source_refreshed_at"], "2026-09-04 16:10:53")
+        self.assertEqual(result["source_rows"], 500)
+        self.assertEqual(len(calls), 5)
+        self.assertTrue(all(allow_truncated for _name, allow_truncated in calls))
+
+    def test_wip_probe_waits_when_one_warehouse_has_no_cycle(self) -> None:
+        def fake_request(endpoint, params, api_key, timeout, **kwargs):
+            warehouse = str(params.get("wh_name"))
+            return {
+                "source_refreshed_at": (
+                    "" if warehouse == "누수규격검사" else "2026-09-04 16:10:53"
+                ),
+                "total_count": 100,
+                "rows": [{}],
+            }
+
+        with patch(
+            "collectors.live_production_need_collector._request",
+            side_effect=fake_request,
+        ):
+            result = probe_wip_source("", 10)
+
+        self.assertFalse(result["ready"])
+        self.assertEqual(result["missing_warehouses"], ["누수규격검사"])
+
+    def test_new_aps_waits_without_downloading_full_wip_before_wip_changes(self) -> None:
+        previous_status = {
+            "status": "success",
+            "aps_source_refreshed_at": "2026-09-04 08:00:15",
+            "wip_source_refreshed_at": "2026-09-04 08:14:45",
+            "refreshed_at": "2026-09-04T08:20:00+09:00",
+            "calculation_revision": 2,
+        }
+        probe = {
+            "ready": True,
+            "source_refreshed_at": "2026-09-04 08:14:45",
+            "source_times": ["2026-09-04 08:14:45"],
+            "missing_warehouses": [],
+            "warehouse_sources": [],
+        }
+        with (
+            patch(
+                "collectors.live_production_need_collector._aps_cycle",
+                return_value="2026-09-04 15:59:29",
+            ),
+            patch(
+                "collectors.live_production_need_collector._live_meta",
+                return_value=previous_status,
+            ),
+            patch(
+                "collectors.live_production_need_collector._read_json",
+                return_value=previous_status,
+            ),
+            patch(
+                "collectors.live_production_need_collector._aps_item_ids",
+                return_value={"P1000"},
+            ),
+            patch(
+                "collectors.live_production_need_collector.probe_wip_source",
+                return_value=probe,
+            ),
+            patch(
+                "collectors.live_production_need_collector._collect_wip"
+            ) as full_wip,
+            patch("collectors.live_production_need_collector._atomic_json"),
+        ):
+            result = refresh("", 10)
+
+        self.assertEqual(result["status"], "waiting_wip")
+        self.assertTrue(result["wip_monitoring"])
+        self.assertEqual(
+            result["attempted_aps_source_refreshed_at"],
+            "2026-09-04 15:59:29",
+        )
+        full_wip.assert_not_called()
 
     def test_due_date_is_absolute_then_same_due_channel_priority(self) -> None:
         rows = [

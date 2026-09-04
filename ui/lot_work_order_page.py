@@ -855,7 +855,6 @@ class LotWorkOrderPage(ProcessOverviewPage):
             self._rebuild_classification_filters()
             self._apply_market_view()
         self.refresh_calculation_status()
-        self.set_refreshing(False)
 
     def refresh_calculation_status(self) -> None:
         """LOT 배정이 사용하는 최신 부족수량/WIP 산출 기준을 표시한다."""
@@ -864,16 +863,31 @@ class LotWorkOrderPage(ProcessOverviewPage):
         wip_time = _display_time(status.get("wip_source_refreshed_at"))
         state = str(status.get("status") or "")
         target = self.calculation_status
-        if state in {"success", "retained", "waiting_wip"} and calculated != "-":
+        if state == "success" and calculated != "-":
             target.setText(f"계산 완료  {_date_clock_time(calculated)}")
-            target.setProperty(
-                "status", "warning" if state in {"retained", "waiting_wip"} else "success"
-            )
-            retained_note = "\n새 회차 대기 중 · 마지막 정상 계산 유지" if state in {"retained", "waiting_wip"} else ""
+            target.setProperty("status", "success")
             target.setToolTip(
                 f"LOT 작업 순서의 부족수량·재공 배정 기준\n"
                 f"계산 완료 {calculated}\n"
-                f"WIP 원천 갱신 {wip_time}{retained_note}"
+                f"WIP 원천 갱신 {wip_time}"
+            )
+        elif state in {"retained", "waiting_wip"} and calculated != "-":
+            attempted_wip = _display_time(
+                status.get("attempted_wip_source_refreshed_at")
+            )
+            if state == "waiting_wip":
+                target.setText(
+                    f"WIP 새 회차 감시 중 · 기존 {_date_clock_time(calculated)} 계산 유지"
+                )
+            else:
+                target.setText(
+                    f"새 회차 계산 보류 · 기존 {_date_clock_time(calculated)} 계산 유지"
+                )
+            target.setProperty("status", "warning")
+            target.setToolTip(
+                f"{status.get('retained_reason') or '마지막 정상 계산을 유지합니다.'}\n"
+                f"기존 WIP 기준 {wip_time}\n"
+                f"확인한 WIP {attempted_wip}"
             )
         else:
             target.setText("계산 전")

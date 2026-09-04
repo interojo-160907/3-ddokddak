@@ -66,6 +66,10 @@ def _collection_worker_count() -> int:
 COLLECTION_WORKERS = _collection_worker_count()
 
 
+class WipCycleNotReady(RuntimeError):
+    """5개 공정창고의 WIP 원천 회차가 아직 하나로 맞춰지지 않은 상태."""
+
+
 def normalize_text(value: object) -> str:
     return str(value or "").strip().upper()
 
@@ -130,6 +134,7 @@ def _request(
     timeout: int,
     *,
     attempts: int = 3,
+    allow_truncated: bool = False,
 ) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
     if api_key:
@@ -146,7 +151,7 @@ def _request(
             response.raise_for_status()
             response.encoding = "utf-8"
             payload = response.json()
-            if payload.get("truncated"):
+            if payload.get("truncated") and not allow_truncated:
                 raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
             return payload
         except (requests.RequestException, ValueError, RuntimeError) as exc:
@@ -242,7 +247,7 @@ def _collect_wip(
             {
                 "wh_name": warehouse_name,
                 "limit": 0,
-                "prompt_context": "똑딱이 2.1 APS 회차 기준 WIP",
+                "prompt_context": "똑딱이 2.3 APS 회차 기준 WIP 전체 수집",
             },
             api_key,
             timeout,
@@ -277,8 +282,74 @@ def _collect_wip(
                     }
                 )
     if len(source_times) != 1:
-        raise RuntimeError(f"5개 APS WIP의 원천 회차가 일치하지 않습니다: {sorted(source_times)}")
+        raise WipCycleNotReady(
+            f"5개 APS WIP의 원천 회차가 일치하지 않습니다: {sorted(source_times)}"
+        )
     return kept, next(iter(source_times)), source_rows
+
+
+def probe_wip_source(api_key: str, timeout: int) -> dict[str, Any]:
+    """5개 공정창고의 WIP 회차만 가볍게 조회해 전체 수집 가능 여부를 확인한다."""
+    warehouse_sources: list[dict[str, Any]] = []
+
+    def fetch_warehouse(
+        warehouse: tuple[int, str, str],
+    ) -> tuple[int, str, str, dict[str, Any]]:
+        stage, warehouse_code, warehouse_name = warehouse
+        payload = _request(
+            "/api/aps-wip",
+            {
+                "wh_name": warehouse_name,
+                "limit": 1,
+                "prompt_context": "똑딱이 2.3 WIP 회차 감시",
+            },
+            api_key,
+            timeout,
+            allow_truncated=True,
+        )
+        return stage, warehouse_code, warehouse_name, payload
+
+    with ThreadPoolExecutor(
+        max_workers=COLLECTION_WORKERS,
+        thread_name_prefix="live-wip-probe",
+    ) as executor:
+        results = executor.map(fetch_warehouse, WAREHOUSES)
+        for stage, warehouse_code, warehouse_name, payload in results:
+            warehouse_sources.append(
+                {
+                    "stage": stage,
+                    "warehouse_code": warehouse_code,
+                    "warehouse_name": warehouse_name,
+                    "source_refreshed_at": str(
+                        payload.get("source_refreshed_at") or ""
+                    ).strip(),
+                    "source_rows": int(
+                        payload.get("total_count") or len(payload.get("rows") or [])
+                    ),
+                }
+            )
+
+    source_times = sorted(
+        {
+            row["source_refreshed_at"]
+            for row in warehouse_sources
+            if row["source_refreshed_at"]
+        }
+    )
+    missing_warehouses = [
+        row["warehouse_name"]
+        for row in warehouse_sources
+        if not row["source_refreshed_at"]
+    ]
+    ready = not missing_warehouses and len(source_times) == 1
+    return {
+        "ready": ready,
+        "source_refreshed_at": source_times[0] if ready else "",
+        "source_times": source_times,
+        "missing_warehouses": missing_warehouses,
+        "warehouse_sources": warehouse_sources,
+        "source_rows": sum(row["source_rows"] for row in warehouse_sources),
+    }
 
 
 def _collect_inventory(
@@ -817,19 +888,92 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
     wip_source = str(previous_meta.get("wip_source_refreshed_at") or "")
     wip_source_rows = 0
     if new_cycle:
-        phase_started = time.perf_counter()
-        wip_rows, wip_source, wip_source_rows = _collect_wip(target_items, api_key, timeout)
-        phase_seconds["wip"] = round(time.perf_counter() - phase_started, 3)
         previous_wip = str(previous_meta.get("wip_source_refreshed_at") or "")
-        if aps_changed and previous_wip and wip_source <= previous_wip:
-            previous = _read_json(STATUS_PATH)
+        phase_started = time.perf_counter()
+        wip_probe = probe_wip_source(api_key, min(timeout, 30))
+        phase_seconds["wip_probe"] = round(time.perf_counter() - phase_started, 3)
+        probed_wip_source = str(wip_probe.get("source_refreshed_at") or "")
+        wip_not_ready = not bool(wip_probe.get("ready"))
+        wip_not_changed = bool(
+            aps_changed
+            and previous_wip
+            and probed_wip_source
+            and probed_wip_source <= previous_wip
+        )
+        wip_before_aps = bool(
+            aps_changed
+            and probed_wip_source
+            and probed_wip_source < aps_cycle
+        )
+        if wip_not_ready or wip_not_changed or wip_before_aps:
+            if wip_not_ready:
+                source_times = wip_probe.get("source_times") or []
+                missing = wip_probe.get("missing_warehouses") or []
+                detail = (
+                    f"확인된 WIP 회차 {source_times or '없음'}"
+                    + (f" · 회차 미확인 {', '.join(missing)}" if missing else "")
+                )
+            elif wip_not_changed:
+                detail = f"현재 WIP 회차 {probed_wip_source or '미확인'}"
+            else:
+                detail = (
+                    f"WIP 회차 {probed_wip_source} · APS 회차 {aps_cycle}보다 이전"
+                )
             result = {
-                **previous,
+                **previous_status,
                 "status": "waiting_wip",
                 "checked_at": captured_at,
+                "wip_checked_at": captured_at,
+                "wip_monitoring": True,
+                "attempted_aps_source_refreshed_at": aps_cycle,
+                "attempted_wip_source_refreshed_at": probed_wip_source,
+                "wip_source_refreshed_at_values": wip_probe.get("source_times") or [],
+                "wip_missing_warehouses": wip_probe.get("missing_warehouses") or [],
+                "wip_warehouse_sources": wip_probe.get("warehouse_sources") or [],
+                "retained_reason": (
+                    "새 APS 회차에 맞는 5개 공정창고 WIP 갱신을 감시 중입니다. "
+                    f"{detail}. 이전 정상 계산을 유지하며 1분 뒤 다시 확인합니다."
+                ),
+            }
+            _atomic_json(STATUS_PATH, result)
+            return result
+        phase_started = time.perf_counter()
+        try:
+            wip_rows, wip_source, wip_source_rows = _collect_wip(
+                target_items, api_key, timeout
+            )
+        except WipCycleNotReady as exc:
+            result = {
+                **previous_status,
+                "status": "waiting_wip",
+                "checked_at": captured_at,
+                "wip_checked_at": captured_at,
+                "wip_monitoring": True,
+                "attempted_aps_source_refreshed_at": aps_cycle,
+                "attempted_wip_source_refreshed_at": probed_wip_source,
+                "wip_source_refreshed_at_values": wip_probe.get("source_times") or [],
+                "wip_warehouse_sources": wip_probe.get("warehouse_sources") or [],
+                "retained_reason": (
+                    f"전체 WIP 수집 중 회차가 전환되었습니다. {exc}. "
+                    "이전 정상 계산을 유지하며 1분 뒤 다시 확인합니다."
+                ),
+            }
+            _atomic_json(STATUS_PATH, result)
+            return result
+        phase_seconds["wip"] = round(time.perf_counter() - phase_started, 3)
+        if aps_changed and previous_wip and wip_source <= previous_wip:
+            result = {
+                **previous_status,
+                "status": "waiting_wip",
+                "checked_at": captured_at,
+                "wip_checked_at": captured_at,
+                "wip_monitoring": True,
                 "attempted_aps_source_refreshed_at": aps_cycle,
                 "attempted_wip_source_refreshed_at": wip_source,
-                "retained_reason": "새 APS 회차에 맞는 WIP 갱신을 기다리는 중이라 이전 정상 계산을 유지합니다.",
+                "retained_reason": (
+                    "전체 WIP 수집 결과가 아직 이전 회차라 기존 정상 계산을 유지하며 "
+                    "1분 뒤 다시 확인합니다."
+                ),
             }
             _atomic_json(STATUS_PATH, result)
             return result
@@ -891,6 +1035,8 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
         "database": str(DB_PATH),
         "aps_source_refreshed_at": aps_cycle,
         "wip_source_refreshed_at": wip_source,
+        "wip_checked_at": captured_at if new_cycle else previous_status.get("wip_checked_at"),
+        "wip_monitoring": False,
         "baseline_date_from": baseline_from,
         "refreshed_at": captured_at,
         "reset": new_cycle,
@@ -898,7 +1044,9 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
         "stored_rows": stored_rows,
         "remaining_rows": remaining_rows,
         "baseline_wip_rows": len(wip_rows) if new_cycle else None,
-        "wip_source_rows": wip_source_rows if new_cycle else None,
+        "wip_source_rows": (
+            wip_source_rows if new_cycle else previous_status.get("wip_source_rows")
+        ),
         "inventory_rows": len(inventory_rows),
         "inventory_source_rows": inventory_source_rows,
         "production_rows": len(production_rows),

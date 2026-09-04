@@ -4799,7 +4799,7 @@ class MainWindow(QMainWindow):
             ("bom", "BOM", "제품명·BOM 전체 스냅샷", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
             ("aps", "S관 APS", "원천 변경 확인 후 S관만 갱신", (("중지", 0), ("1분 (기본)", 1), ("5분", 5), ("10분", 10), ("30분", 30), ("1시간", 60))),
             ("production", "생산실적", "07시 첫 전체 · 이후 최근 7일", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
-            ("live", "실시간 실적 반영", "5개 공정창고·완료실적 계산", (("수동만", 0), ("30분", 30), ("1시간 (기본)", 60), ("2시간", 120), ("3시간", 180))),
+            ("live", "WIP·실시간 실적 반영", "5개 WIP 회차 감시·전체 수집·재고·완료실적 계산", (("수동만", 0), ("30분", 30), ("1시간 (기본)", 60), ("2시간", 120), ("3시간", 180))),
         )
         for row_index, (key, name, subtext, choices) in enumerate(definitions, start=1):
             name_box = QVBoxLayout()
@@ -5034,7 +5034,7 @@ class MainWindow(QMainWindow):
             ("bom", "BOM", DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json", ("product_rows", "bom_rows")),
             ("aps", "APS", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json", ("stored_rows",)),
             ("production", "생산실적", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json", ("stored_rows", "s_factory_rows")),
-            ("live", "실시간 실적 반영", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json", ("remaining_rows", "evidence_rows")),
+            ("live", "WIP·실시간 실적", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json", ("remaining_rows", "evidence_rows")),
         )
         parts = []
         collection_errors = self._read_collection_errors()
@@ -5052,10 +5052,13 @@ class MainWindow(QMainWindow):
                 error_info = collection_errors.get(key)
                 has_error = isinstance(error_info, dict) and bool(error_info.get("message"))
                 retained = status_value == "retained"
+                waiting_wip = status_value == "waiting_wip"
                 success = status_value in {"success", "skipped", "retained"} and not has_error
                 state_text = (
                     "● 오류 발생"
                     if has_error
+                    else "● WIP 새 회차 감시 중"
+                    if waiting_wip
                     else
                     "● 원천 0건 · 기존 유지"
                     if retained
@@ -5068,7 +5071,8 @@ class MainWindow(QMainWindow):
                     mode = "일일 전체" if "전체" in str(status.get("collection_mode")) else "최근 7일"
                     state_text += f" · {mode}"
                 if key == "live" and status_value == "success":
-                    state_text += " · 새 APS 기준" if status.get("reset") else " · 계산 완료"
+                    wip_clock = str(status.get("wip_source_refreshed_at") or "")[-8:-3]
+                    state_text += f" · WIP {wip_clock}" if wip_clock else " · 계산 완료"
                 controls["state"].setText(state_text)
                 controls["state"].setProperty("state", "success" if success else "warning")
                 controls["state"].style().unpolish(controls["state"])
@@ -5094,6 +5098,7 @@ class MainWindow(QMainWindow):
                     controls["state"].setToolTip(
                         f"APS 기준 {status.get('aps_source_refreshed_at') or '-'}\n"
                         f"WIP 기준 {status.get('wip_source_refreshed_at') or '-'}\n"
+                        f"WIP 마지막 확인 {status.get('wip_checked_at') or '-'}\n"
                         f"인정 완료 {float(status.get('recognized_qty') or 0):,.0f} pcs"
                     )
         self.settings_data_status.setText("  |  ".join(parts))
@@ -5171,11 +5176,15 @@ class MainWindow(QMainWindow):
             ("live", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json"),
         )
         due_sources: list[str] = []
+        waiting_wip_due = False
         for source, status_path in definitions:
-            minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
-            if minutes <= 0:
-                continue
             status = self._read_refresh_status(status_path)
+            status_value = str(status.get("status") or "")
+            waiting_wip = source == "live" and status_value == "waiting_wip"
+            minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
+            # APS 변경으로 시작된 WIP 감시는 정기 수집 설정과 별개로 완료까지 이어 간다.
+            if minutes <= 0 and not waiting_wip:
+                continue
             refreshed = self._status_refreshed_at(status_path)
             attempted = self._collection_last_attempt.get(source)
             daily_full_due = (
@@ -5185,7 +5194,7 @@ class MainWindow(QMainWindow):
             )
             retained_retry_due = (
                 source == "live"
-                and str(status.get("status") or "") in {"waiting_wip", "retained"}
+                and status_value in {"waiting_wip", "retained"}
             )
             due = (
                 daily_full_due
@@ -5194,12 +5203,23 @@ class MainWindow(QMainWindow):
                 or (now - refreshed) >= timedelta(minutes=minutes)
             )
             retry_minutes = (
-                1 if source == "aps" else 5 if retained_retry_due else max(5, minutes)
+                1
+                if source == "aps" or waiting_wip
+                else 5
+                if retained_retry_due
+                else max(5, minutes)
             )
             retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
             if due and retry_ready:
                 due_sources.append(source)
+                waiting_wip_due = waiting_wip_due or waiting_wip
         if not due_sources:
+            return
+        # APS 원천 확인과 WIP 후속 감시가 동시에 도래해도 BOM·생산실적까지
+        # 전체 수집하지 않고, 새 APS에 딸린 WIP 확인을 먼저 끝낸다.
+        if waiting_wip_due:
+            self._collection_last_attempt["live"] = now
+            self._start_data_collection("live", scheduled=True)
             return
         if len(due_sources) >= 2:
             for source in due_sources:
@@ -5416,9 +5436,13 @@ class MainWindow(QMainWindow):
             controls["manual"].setEnabled(not busy)
             controls["manual"].setText("수집 중…" if busy and key == source else "지금 갱신")
         if hasattr(self, "live_need_page"):
-            self.live_need_page.set_refreshing(busy and source == "live")
+            self.live_need_page.set_refreshing(busy and source in {"live", "all"})
+        for page in getattr(self, "live_fixed_process_pages", {}).values():
+            page.set_refreshing(busy and source in {"live", "all"})
         if hasattr(self, "lot_work_order_page"):
-            self.lot_work_order_page.set_refreshing(busy and source == "live")
+            self.lot_work_order_page.set_refreshing(busy and source in {"live", "all"})
+        for page in getattr(self, "lot_fixed_process_pages", {}).values():
+            page.set_refreshing(busy and source in {"live", "all"})
 
     def _capture_collection_output(self) -> None:
         process = getattr(self, "settings_collection_process", None)

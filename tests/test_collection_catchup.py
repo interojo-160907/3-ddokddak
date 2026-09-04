@@ -96,6 +96,69 @@ class SchedulerCatchupTests(unittest.TestCase):
         if expected.is_file():
             self.assertEqual(Path(_collector_executable()), expected)
 
+    def test_waiting_wip_is_checked_each_minute_even_when_live_schedule_is_off(self) -> None:
+        window = self._window()
+        window.collection_schedule = {
+            "bom_minutes": 0,
+            "aps_minutes": 0,
+            "production_minutes": 0,
+            "live_minutes": 0,
+        }
+        window._read_refresh_status = Mock(
+            return_value={
+                "status": "waiting_wip",
+                "refreshed_at": datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+        window._status_refreshed_at = Mock(return_value=datetime.now())
+
+        MainWindow._run_scheduled_collections(window)
+
+        window._start_data_collection.assert_called_once_with("live", scheduled=True)
+
+    def test_wip_monitor_has_priority_over_simultaneous_aps_poll(self) -> None:
+        window = self._window()
+        window.collection_schedule = {
+            "bom_minutes": 0,
+            "aps_minutes": 1,
+            "production_minutes": 0,
+            "live_minutes": 60,
+        }
+        window._read_refresh_status = Mock(
+            return_value={
+                "status": "waiting_wip",
+                "refreshed_at": (
+                    datetime.now() - timedelta(minutes=10)
+                ).isoformat(timespec="seconds"),
+            }
+        )
+        window._status_refreshed_at = Mock(
+            return_value=datetime.now() - timedelta(minutes=10)
+        )
+
+        MainWindow._run_scheduled_collections(window)
+
+        window._start_data_collection.assert_called_once_with("live", scheduled=True)
+        window._start_aps_monitor_check.assert_not_called()
+
+    def test_live_collection_busy_state_reaches_main_and_internal_tabs(self) -> None:
+        live_main = Mock()
+        lot_main = Mock()
+        live_internal = [Mock(), Mock()]
+        lot_internal = [Mock(), Mock()]
+        window = SimpleNamespace(
+            live_need_page=live_main,
+            lot_work_order_page=lot_main,
+            live_fixed_process_pages={str(i): page for i, page in enumerate(live_internal)},
+            lot_fixed_process_pages={str(i): page for i, page in enumerate(lot_internal)},
+            collection_controls={},
+        )
+
+        MainWindow._set_collection_busy(window, True, "live")
+
+        for page in [live_main, lot_main, *live_internal, *lot_internal]:
+            page.set_refreshing.assert_called_once_with(True)
+
 
 if __name__ == "__main__":
     unittest.main()
