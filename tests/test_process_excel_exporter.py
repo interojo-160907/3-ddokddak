@@ -99,7 +99,7 @@ class OverviewExcelExporterTest(unittest.TestCase):
 
 
 class LotWorkOrderExcelExporterTest(unittest.TestCase):
-    def test_payload_keeps_visible_order_dynamic_headers_and_hidden_columns(self) -> None:
+    def test_payload_moves_injection_downstream_code_to_hidden_right_edge(self) -> None:
         rows = [{
             "구분": "추가사출",
             "현재위치": "사출 필요",
@@ -116,16 +116,16 @@ class LotWorkOrderExcelExporterTest(unittest.TestCase):
             rows,
             columns,
             header_labels={"재고수량": "필요수량"},
-            hidden_columns=["Q코드"],
         )
         sheet = payload["sheets"][0]
         self.assertEqual(payload["subject"], "생산3팀 LOT 작업 순서")
         self.assertEqual(sheet["name"], "LOT작업순서_사출")
         self.assertEqual(sheet["columns"], [
-            "구분", "현재위치", "신규분류요약", "R코드", "Q코드", "필요수량",
+            "구분", "현재위치", "신규분류요약", "R코드", "필요수량", "Q코드",
         ])
         self.assertEqual(sheet["hiddenColumns"], ["Q코드"])
-        self.assertEqual(sheet["rows"][0][-1], 4906)
+        self.assertEqual(sheet["rows"][0][-2], 4906)
+        self.assertEqual(sheet["rows"][0][-1], "Q0001-01.00")
 
     def test_workbook_has_lot_specific_sheet_and_hidden_folded_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -152,6 +152,8 @@ class LotWorkOrderExcelExporterTest(unittest.TestCase):
                     ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}col[@hidden='1']"
                 )
                 self.assertEqual(len(hidden), 1)
+                self.assertEqual(hidden[0].attrib["min"], "4")
+                self.assertEqual(hidden[0].attrib["max"], "4")
 
 
 if __name__ == "__main__":

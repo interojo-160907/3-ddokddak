@@ -260,11 +260,15 @@ def build_lot_work_order_export_payload(
     hidden_columns: list[str] | tuple[str, ...] = (),
     note: str = "",
 ) -> dict:
-    """현재 LOT 작업순서 표의 표시 순서와 숨김 상태를 그대로 내보낸다."""
+    """현재 LOT 작업순서 표를 공정별 Excel 규칙에 맞춰 내보낸다."""
     labels = dict(header_labels or {})
     source_columns = [str(column) for column in columns]
-    export_columns = [str(labels.get(column, column)) for column in source_columns]
+    process_name = str(process or "")
     hidden_sources = {str(column) for column in hidden_columns}
+    if process_name in {"사출", "분리"} and "Q코드" in source_columns:
+        source_columns = [column for column in source_columns if column != "Q코드"] + ["Q코드"]
+        hidden_sources.add("Q코드")
+    export_columns = [str(labels.get(column, column)) for column in source_columns]
     export_rows: list[list[object]] = []
     for row in rows:
         values: list[object] = []
@@ -273,7 +277,7 @@ def build_lot_work_order_export_payload(
             values.append(_number(value) if "수량" in header else str(value or ""))
         export_rows.append(values)
 
-    process_label = PROCESS_EXPORT_NAME.get(str(process or ""), "전체")
+    process_label = PROCESS_EXPORT_NAME.get(process_name, "전체")
     title = f"{datetime.now():%y%m%d} LOT 작업 순서 · {process_label}"
     return {
         "title": title,
