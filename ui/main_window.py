@@ -1218,11 +1218,11 @@ class MainWindow(QMainWindow):
         "lot_leak": "누수규격",
     }
     LOT_PROCESS_TITLES = {
-        "lot_injection": "LOT 작업 순서 · 사출",
-        "lot_separation": "LOT 작업 순서 · 분리",
-        "lot_hydration": "LOT 작업 순서 · 하이드레이션",
-        "lot_inspection": "LOT 작업 순서 · 검사·접착",
-        "lot_leak": "LOT 작업 순서 · 누수·규격",
+        "lot_injection": "사출",
+        "lot_separation": "분리",
+        "lot_hydration": "하이드레이션",
+        "lot_inspection": "검사접착",
+        "lot_leak": "누수규격",
     }
 
     def __init__(self, management_notices: list[dict[str, Any]] | tuple[dict[str, Any], ...] = ()) -> None:

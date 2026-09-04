@@ -104,7 +104,7 @@ class HydrationAllocationTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["체크시트(LOT)"], "S20260831-490")
         self.assertEqual(rows[0]["P코드"], "P0002-01.25")
-        self.assertEqual(rows[0]["배정"], "통째")
+        self.assertEqual(rows[0]["배정"], "단일구성")
         self.assertEqual(rows[0]["배정수량"], 1719)
 
     def test_only_final_unabsorbed_lot_is_split_at_most_twice(self) -> None:
@@ -114,7 +114,7 @@ class HydrationAllocationTest(unittest.TestCase):
         rows = service.load_rows("하이드레이션", allocation_mode="split2")
 
         self.assertEqual(len(rows), 2)
-        self.assertEqual({row["배정"] for row in rows}, {"최종 보류 1/2", "최종 보류 2/2"})
+        self.assertEqual({row["배정"] for row in rows}, {"분할구성 1/2", "분할구성 2/2"})
         self.assertEqual(sum(row["배정수량"] for row in rows), 500)
         self.assertTrue(all(row["배정수량"] >= 200 for row in rows))
 

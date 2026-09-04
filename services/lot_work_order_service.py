@@ -711,7 +711,7 @@ class LotWorkOrderService:
                     "재고수량": allocated_qty,
                     "필요조치": (
                         f"{q_code} LOT를 {p_code} 한 품목으로 전량 투입"
-                        if split_label == "통째"
+                        if split_label == "단일구성"
                         else f"동일 LOT {split_label} · {p_code} 투입"
                     ),
                     "_수주건수": len({
@@ -737,20 +737,20 @@ class LotWorkOrderService:
                 continue
             lot_qty = _number(lot.get("stock_qty"))
             # 어느 P코드든 현재 부족수량이 LOT 전량 이상이면 쪼갤 이유가 없다.
-            # 납기 우선순위를 유지한 채 전량을 흡수할 수 있는 첫 P코드에 통째 배정한다.
+            # 납기 우선순위를 유지한 채 전량을 흡수할 수 있는 첫 P코드에 단일 배정한다.
             full_lot_candidates = [
                 need for need in candidates
                 if float(need["remaining"]) >= lot_qty
             ]
             if full_lot_candidates:
-                append_assignment(lot, full_lot_candidates[0], lot_qty, "통째")
+                append_assignment(lot, full_lot_candidates[0], lot_qty, "단일구성")
                 continue
             if allocation_mode == "split2":
-                # 통째로 흡수할 곳이 없는 LOT는 일단 보류한다. 모든 통째 배정을
+                # 단일로 흡수할 곳이 없는 LOT는 일단 보류한다. 모든 단일 배정을
                 # 끝낸 뒤 남은 부족 조각에 한해서만 최대 2개 P코드로 나눈다.
                 deferred_split_lots.append(lot)
                 continue
-            append_assignment(lot, candidates[0], lot_qty, "통째")
+            append_assignment(lot, candidates[0], lot_qty, "단일구성")
 
         for lot in deferred_split_lots:
             candidates = eligible_needs(lot)
@@ -764,14 +764,14 @@ class LotWorkOrderService:
                     float(candidates[1]["remaining"]),
                 )
                 if split is not None:
-                    append_assignment(lot, candidates[0], split[0], "최종 보류 1/2")
-                    append_assignment(lot, candidates[1], split[1], "최종 보류 2/2")
+                    append_assignment(lot, candidates[0], split[0], "분할구성 1/2")
+                    append_assignment(lot, candidates[1], split[1], "분할구성 2/2")
                     continue
-            append_assignment(lot, candidates[0], lot_qty, "통째")
+            append_assignment(lot, candidates[0], lot_qty, "단일구성")
 
         result.sort(
             key=lambda row: (
-                0 if row.get("배정") == "통째" else 1,
+                0 if row.get("배정") == "단일구성" else 1,
                 str(row.get("납기일") or "9999-12-31"),
                 power_sort_key(row.get("_POWER_NUM", row.get("POWER"))),
                 str(row.get("P코드") or ""),

@@ -251,6 +251,37 @@ def build_overview_export_payload(
     }
 
 
+def _lot_work_order_sheet(
+    name: str,
+    rows: list[dict],
+    columns: list[str] | tuple[str, ...],
+    *,
+    header_labels: dict[str, str] | None = None,
+    hidden_columns: list[str] | tuple[str, ...] = (),
+) -> dict:
+    labels = dict(header_labels or {})
+    source_columns = [str(column) for column in columns]
+    hidden_sources = {str(column) for column in hidden_columns}
+    export_columns = [str(labels.get(column, column)) for column in source_columns]
+    export_rows: list[list[object]] = []
+    for row in rows:
+        values: list[object] = []
+        for source, header in zip(source_columns, export_columns):
+            value = row.get(source, "")
+            values.append(_number(value) if "수량" in header else str(value or ""))
+        export_rows.append(values)
+    return {
+        "name": name,
+        "columns": export_columns,
+        "rows": export_rows,
+        "hiddenColumns": [
+            labels.get(column, column)
+            for column in source_columns
+            if column in hidden_sources
+        ],
+    }
+
+
 def build_lot_work_order_export_payload(
     process: str | None,
     rows: list[dict],
@@ -261,21 +292,12 @@ def build_lot_work_order_export_payload(
     note: str = "",
 ) -> dict:
     """현재 LOT 작업순서 표를 공정별 Excel 규칙에 맞춰 내보낸다."""
-    labels = dict(header_labels or {})
     source_columns = [str(column) for column in columns]
     process_name = str(process or "")
     hidden_sources = {str(column) for column in hidden_columns}
     if process_name in {"사출", "분리"} and "Q코드" in source_columns:
         source_columns = [column for column in source_columns if column != "Q코드"] + ["Q코드"]
         hidden_sources.add("Q코드")
-    export_columns = [str(labels.get(column, column)) for column in source_columns]
-    export_rows: list[list[object]] = []
-    for row in rows:
-        values: list[object] = []
-        for source, header in zip(source_columns, export_columns):
-            value = row.get(source, "")
-            values.append(_number(value) if "수량" in header else str(value or ""))
-        export_rows.append(values)
 
     process_label = PROCESS_EXPORT_NAME.get(process_name, "전체")
     title = f"{datetime.now():%y%m%d} LOT 작업 순서 · {process_label}"
@@ -284,16 +306,33 @@ def build_lot_work_order_export_payload(
         "subject": "생산3팀 LOT 작업 순서",
         "note": note or "현재 화면의 필터·정렬·열 접기 상태 기준",
         "sheets": [
-            {
-                "name": f"LOT작업순서_{process_label}",
-                "columns": export_columns,
-                "rows": export_rows,
-                "hiddenColumns": [
-                    labels.get(column, column)
-                    for column in source_columns
-                    if column in hidden_sources
-                ],
-            }
+            _lot_work_order_sheet(
+                f"LOT작업순서_{process_label}",
+                rows,
+                source_columns,
+                header_labels=header_labels,
+                hidden_columns=tuple(hidden_sources),
+            )
+        ],
+    }
+
+
+def build_hydration_lot_work_order_export_payload(
+    single_rows: list[dict],
+    split_rows: list[dict],
+    single_columns: list[str] | tuple[str, ...],
+    split_columns: list[str] | tuple[str, ...],
+    *,
+    note: str = "",
+) -> dict:
+    """하이드레이션의 단일구성·분할구성안을 한 파일의 두 시트로 만든다."""
+    return {
+        "title": f"{datetime.now():%y%m%d} LOT 작업 순서 · 하이드레이션",
+        "subject": "생산3팀 LOT 작업 순서",
+        "note": note or "현재 화면의 필터·정렬 결과를 두 구성안에 동일 적용",
+        "sheets": [
+            _lot_work_order_sheet("단일구성", single_rows, single_columns),
+            _lot_work_order_sheet("분할구성", split_rows, split_columns),
         ],
     }
 
@@ -586,6 +625,40 @@ def export_lot_work_order_workbook(
     )
     temporary_output = Path(tempfile.gettempdir()) / (
         f"ddokddak_lot_work_order_{uuid.uuid4().hex}.xlsx"
+    )
+    try:
+        _write_workbook(temporary_output, payload)
+        os.replace(temporary_output, output)
+        return output
+    finally:
+        temporary_output.unlink(missing_ok=True)
+
+
+def export_hydration_lot_work_order_workbook(
+    single_rows: list[dict],
+    split_rows: list[dict],
+    single_columns: list[str] | tuple[str, ...],
+    split_columns: list[str] | tuple[str, ...],
+    *,
+    note: str = "",
+    output_path: Path | None = None,
+) -> Path:
+    requested_output = (
+        Path(output_path)
+        if output_path
+        else desktop_lot_work_order_export_path("하이드레이션")
+    ).resolve()
+    output = _available_output_path(requested_output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    payload = build_hydration_lot_work_order_export_payload(
+        single_rows,
+        split_rows,
+        single_columns,
+        split_columns,
+        note=note,
+    )
+    temporary_output = Path(tempfile.gettempdir()) / (
+        f"ddokddak_hydration_lot_work_order_{uuid.uuid4().hex}.xlsx"
     )
     try:
         _write_workbook(temporary_output, payload)

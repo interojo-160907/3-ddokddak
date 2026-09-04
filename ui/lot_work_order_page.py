@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
 
 from services.live_production_need_service import LiveProductionNeedService
 from services.lot_work_order_service import LotWorkOrderService
-from services.process_excel_exporter import export_lot_work_order_workbook
+from services.process_excel_exporter import (
+    export_hydration_lot_work_order_workbook,
+    export_lot_work_order_workbook,
+)
 from services.process_status_service import classification_sort_key, power_sort_key
 from ui.message_dialog import show_app_message
 from ui.process_overview_page import (
@@ -39,10 +42,11 @@ LOT_COLUMNS = [
 ]
 INJECTION_COLUMNS = ["구분", *LOT_COLUMNS]
 HYDRATION_COLUMNS = [
-    "배정", "현재위치", "신규분류요약", "Q코드", "체크시트(LOT)", "P코드",
-    "품명", "POWER", "CP", "AXIS", "ADD", "납기일", "LOT수량", "필요수량",
-    "배정수량", "초과배정",
+    "배정", "현재위치", "신규분류요약", "Q코드", "P코드", "체크시트(LOT)",
+    "품명", "POWER", "CP", "AXIS", "ADD", "납기일", "LOT수량", "배정수량",
 ]
+HYDRATION_SINGLE_COLUMNS = HYDRATION_COLUMNS[:-1]
+HYDRATION_SPLIT_COLUMNS = HYDRATION_COLUMNS
 SAME_CODE_COLUMNS = [
     "현재위치", "신규분류요약", "P코드", "체크시트(LOT)", "품명",
     "POWER", "CP", "AXIS", "ADD", "납기일", "재고수량",
@@ -58,10 +62,10 @@ LOT_WIDTHS = {
 }
 INJECTION_WIDTHS = {"구분": 92, **LOT_WIDTHS}
 HYDRATION_WIDTHS = {
-    "배정": 98, "신규분류요약": 155, "현재위치": 105, "Q코드": 178,
-    "체크시트(LOT)": 142, "P코드": 178, "품명": 260, "POWER": 78,
-    "CP": 70, "AXIS": 64, "ADD": 68, "납기일": 98, "LOT수량": 92,
-    "필요수량": 96, "배정수량": 96, "초과배정": 96,
+    "배정": 96, "신규분류요약": 136, "현재위치": 96, "Q코드": 162,
+    "P코드": 162, "체크시트(LOT)": 132, "품명": 240, "POWER": 72,
+    "CP": 58, "AXIS": 58, "ADD": 58, "납기일": 92, "LOT수량": 86,
+    "배정수량": 90,
 }
 SAME_CODE_WIDTHS = {
     "신규분류요약": 160, "현재위치": 125, "P코드": 188,
@@ -73,6 +77,15 @@ OVERVIEW_WIDTHS = {
     "체크시트": 145, "품명": 320, "POWER": 78, "CP": 70,
     "AXIS": 64, "ADD": 68, "납기일": 98, "재고수량": 105,
 }
+LOT_MARKET_CATEGORIES = {"해외", "PB", "국내", "안전"}
+
+
+def normalize_lot_market_selection(markets: set[str]) -> set[str]:
+    """네 관별 버튼을 모두 고르면 미분류 LOT까지 포함하는 전체 조회로 본다."""
+    selected = set(markets) or {"전체"}
+    if "전체" in selected or LOT_MARKET_CATEGORIES.issubset(selected):
+        return {"전체"}
+    return selected
 
 
 def _display_time(value: object) -> str:
@@ -207,11 +220,11 @@ class LotWorkOrderPage(ProcessOverviewPage):
             self.lot_columns = LOT_COLUMNS
             widths = LOT_WIDTHS
         process_title = {
-            "접착": "검사·접착",
-            "누수규격": "누수·규격",
+            "접착": "검사접착",
+            "누수규격": "누수규격",
         }.get(process, process)
         self.lot_table = DataTable(
-            f"LOT 작업 순서 · {process_title}",
+            process_title,
             self.lot_columns,
             widths,
             "품명",
@@ -219,6 +232,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
             self,
         )
         self._update_downstream_code_visibility()
+        self._update_hydration_column_visibility()
         self._update_injection_quantity_header()
         self.layout().addWidget(self.lot_table, 1)
 
@@ -278,7 +292,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
             self.hydration_mode_group = QButtonGroup(self)
             self.hydration_mode_group.setExclusive(True)
             self.hydration_mode_buttons: dict[str, QPushButton] = {}
-            for label, mode in (("현장안 · 통째", "whole"), ("최종 보류 · 2분할", "split2")):
+            for label, mode in (("단일구성", "whole"), ("분할구성", "split2")):
                 button = QPushButton(label)
                 button.setObjectName("FilterButton")
                 button.setStyleSheet(FILTER_BUTTON_SELECTION_STYLE)
@@ -286,9 +300,9 @@ class LotWorkOrderPage(ProcessOverviewPage):
                 button.setChecked(mode == "whole")
                 button.setProperty("allocationMode", mode)
                 button.setToolTip(
-                    "한 LOT를 한 P코드에 전량 배정합니다."
+                    "한 LOT를 한 P코드에 전량 배정합니다. 표에는 LOT수량까지만 표시합니다."
                     if mode == "whole"
-                    else "통째 배정을 모두 끝낸 뒤 남는 부족분만 최대 2개 P코드로 보류합니다. 최소 200개, 100개 단위입니다."
+                    else "단일 배정을 모두 끝낸 뒤 남는 LOT만 최대 2개 P코드로 나눕니다. 최소 200개, 100개 단위입니다."
                 )
                 button.clicked.connect(self._hydration_mode_changed)
                 self.hydration_mode_group.addButton(button)
@@ -338,7 +352,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
             )
             display_row.addWidget(self.downstream_code_check)
         elif self.fixed_process == "하이드레이션":
-            rule_note = QLabel("통째 우선 · 최종 보류만 2분할 · 최소 200개 · 100개 단위")
+            rule_note = QLabel("단일구성 우선 · 마지막 잔여 LOT만 2분할 · 최소 200개 · 100개 단위")
             rule_note.setObjectName("CardSub")
             display_row.addWidget(rule_note)
         display_row.addStretch()
@@ -378,7 +392,16 @@ class LotWorkOrderPage(ProcessOverviewPage):
         return str(button.property("allocationMode") or "whole") if button else "whole"
 
     def _hydration_mode_changed(self) -> None:
+        self._update_hydration_column_visibility()
         self._reload_hydration_rows()
+
+    def _update_hydration_column_visibility(self) -> None:
+        if self.fixed_process != "하이드레이션" or not hasattr(self, "lot_table"):
+            return
+        self.lot_table.table.setColumnHidden(
+            self.lot_columns.index("배정수량"),
+            self._selected_hydration_mode() == "whole",
+        )
 
     def _reload_hydration_rows(self) -> None:
         if self.fixed_process != "하이드레이션" or not hasattr(self, "lot_table"):
@@ -419,11 +442,11 @@ class LotWorkOrderPage(ProcessOverviewPage):
         return [row for row in self._lot_rows if row.get("상태") == "배정"]
 
     def _selected_markets(self) -> set[str]:
-        return {
+        return normalize_lot_market_selection({
             str(button.property("market"))
             for button in self.market_buttons
             if button.isChecked()
-        } or {"전체"}
+        })
 
     def _row_for_selected_markets(
         self,
@@ -602,42 +625,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
         if self.fixed_process is None:
             self._apply_overview_view()
             return
-        raw_search = self.search.text().replace("，", ",").strip()
-        tokens = tuple(dict.fromkeys(
-            token.strip().casefold() for token in raw_search.split(",") if token.strip()
-        ))
-        search_all = not tokens or "*" in tokens
-        fields = tuple(self.lot_table.columns)
-        selected_markets = self._selected_markets()
-        selected_categories = {
-            category
-            for category, button in self.lot_classification_buttons.items()
-            if button.isChecked()
-        } or {"전체"}
-        due_limit = self._lot_due_limit()
-        rows: list[dict] = []
-        for source_row in self._work_target_rows():
-            row = self._row_for_selected_markets(source_row, selected_markets)
-            if row is None:
-                continue
-            category = str(row.get("신규분류요약") or "미확인").strip() or "미확인"
-            if "전체" not in selected_categories and category not in selected_categories:
-                continue
-            if due_limit is not None:
-                try:
-                    row_due = datetime.strptime(str(row.get("납기일") or "")[:10], "%Y-%m-%d").date()
-                except ValueError:
-                    continue
-                if row_due > due_limit:
-                    continue
-            if not search_all and not any(
-                token in str(row.get(field) or "").casefold()
-                for token in tokens
-                for field in fields
-            ):
-                continue
-            rows.append(row)
-        rows.sort(key=self._filtered_work_sort_key)
+        rows = self._filtered_lot_rows()
         inventory_qty = sum(float(row.get("재고수량") or 0) for row in rows)
         if self.fixed_process == "사출":
             saved_rows = [row for row in rows if row.get("구분") == "저장상태"]
@@ -653,21 +641,70 @@ class LotWorkOrderPage(ProcessOverviewPage):
                 (str(row.get("Q코드") or ""), str(row.get("체크시트(LOT)") or ""))
                 for row in rows
             })
-            excess_qty = sum(float(row.get("초과배정") or 0) for row in rows)
-            held_lot_count = len({
+            split_lot_count = len({
                 (str(row.get("Q코드") or ""), str(row.get("체크시트(LOT)") or ""))
                 for row in rows
-                if str(row.get("배정") or "").startswith("최종 보류")
+                if str(row.get("배정") or "").startswith("분할구성")
             })
-            caption = (
-                f"LOT {lot_count:,}개 · 작업행 {len(rows):,}개 · "
-                f"배정수량 {inventory_qty:,.0f} pcs · 최종 보류 {held_lot_count:,} LOT"
-                f" · 초과배정 {excess_qty:,.0f} pcs"
-            )
+            if self._selected_hydration_mode() == "whole":
+                caption = (
+                    f"단일구성 {lot_count:,} LOT · 작업행 {len(rows):,}개 · "
+                    f"LOT수량 {inventory_qty:,.0f} pcs"
+                )
+            else:
+                caption = (
+                    f"분할구성안 {lot_count:,} LOT · 작업행 {len(rows):,}개 · "
+                    f"배정수량 {inventory_qty:,.0f} pcs · 분할 {split_lot_count:,} LOT"
+                )
         else:
             caption = f"LOT {len(rows):,}개 · 재고수량 {inventory_qty:,.0f} pcs"
         self.lot_table.load(rows, caption)
         self._update_lot_kpis(rows, inventory_qty)
+
+    def _filtered_lot_rows(self, source_rows: list[dict] | None = None) -> list[dict]:
+        """화면과 Excel에 같은 LOT 필터와 정렬을 적용한다."""
+        raw_search = self.search.text().replace("，", ",").strip()
+        tokens = tuple(dict.fromkeys(
+            token.strip().casefold() for token in raw_search.split(",") if token.strip()
+        ))
+        search_all = not tokens or "*" in tokens
+        fields = tuple(self.lot_table.columns)
+        selected_markets = self._selected_markets()
+        selected_categories = {
+            category
+            for category, button in self.lot_classification_buttons.items()
+            if button.isChecked()
+        } or {"전체"}
+        due_limit = self._lot_due_limit()
+        rows: list[dict] = []
+        candidates = self._work_target_rows() if source_rows is None else source_rows
+        for source_row in candidates:
+            if source_row.get("상태") not in {None, "배정"}:
+                continue
+            row = self._row_for_selected_markets(source_row, selected_markets)
+            if row is None:
+                continue
+            category = str(row.get("신규분류요약") or "미확인").strip() or "미확인"
+            if "전체" not in selected_categories and category not in selected_categories:
+                continue
+            if due_limit is not None:
+                try:
+                    row_due = datetime.strptime(
+                        str(row.get("납기일") or "")[:10], "%Y-%m-%d"
+                    ).date()
+                except ValueError:
+                    continue
+                if row_due > due_limit:
+                    continue
+            if not search_all and not any(
+                token in str(row.get(field) or "").casefold()
+                for token in tokens
+                for field in fields
+            ):
+                continue
+            rows.append(row)
+        rows.sort(key=self._filtered_work_sort_key)
+        return rows
 
     def _apply_overview_view(self) -> None:
         raw_search = self.search.text().replace("，", ",").strip()
@@ -769,6 +806,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
             self._update_injection_quantity_header()
         if hasattr(self, "hydration_mode_buttons"):
             self.hydration_mode_buttons["whole"].setChecked(True)
+            self._update_hydration_column_visibility()
         if hasattr(self, "downstream_code_check"):
             self.downstream_code_check.setChecked(False)
         self.search.clear()
@@ -866,18 +904,42 @@ class LotWorkOrderPage(ProcessOverviewPage):
                 if table.isColumnHidden(index)
             ]
             process_label = self.fixed_process or "전체"
-            filter_note = (
-                f"{process_label} · 현재 화면의 필터·정렬 결과 {len(model.rows):,}행 · "
-                "접힌 열은 Excel에서도 숨김 처리"
-            )
-            output = export_lot_work_order_workbook(
-                self.fixed_process,
-                list(model.rows),
-                list(self.lot_table.columns),
-                header_labels=dict(model.header_labels),
-                hidden_columns=hidden_columns,
-                note=filter_note,
-            )
+            if self.fixed_process == "하이드레이션":
+                markets = self._selected_markets()
+                single_rows = self._filtered_lot_rows(self.lot_service.load_rows(
+                    "하이드레이션",
+                    allocation_mode="whole",
+                    markets=markets,
+                ))
+                split_rows = self._filtered_lot_rows(self.lot_service.load_rows(
+                    "하이드레이션",
+                    allocation_mode="split2",
+                    markets=markets,
+                ))
+                filter_note = (
+                    "하이드레이션 · 현재 화면의 납기·분류·관별·검색 필터를 두 구성안에 동일 적용 · "
+                    f"단일구성 {len(single_rows):,}행 · 분할구성 {len(split_rows):,}행"
+                )
+                output = export_hydration_lot_work_order_workbook(
+                    single_rows,
+                    split_rows,
+                    list(HYDRATION_SINGLE_COLUMNS),
+                    list(HYDRATION_SPLIT_COLUMNS),
+                    note=filter_note,
+                )
+            else:
+                filter_note = (
+                    f"{process_label} · 현재 화면의 필터·정렬 결과 {len(model.rows):,}행 · "
+                    "접힌 열은 Excel에서도 숨김 처리"
+                )
+                output = export_lot_work_order_workbook(
+                    self.fixed_process,
+                    list(model.rows),
+                    list(self.lot_table.columns),
+                    header_labels=dict(model.header_labels),
+                    hidden_columns=hidden_columns,
+                    note=filter_note,
+                )
             button.setText("저장 완료 ✓")
             button.setToolTip(f"저장 완료: {output}")
             QTimer.singleShot(2500, lambda: button.setText(original_text))

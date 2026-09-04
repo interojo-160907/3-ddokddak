@@ -7,8 +7,10 @@ import zipfile
 from pathlib import Path
 
 from services.process_excel_exporter import (
+    build_hydration_lot_work_order_export_payload,
     build_lot_work_order_export_payload,
     build_overview_export_payload,
+    export_hydration_lot_work_order_workbook,
     export_lot_work_order_workbook,
     export_overview_workbook,
 )
@@ -99,6 +101,85 @@ class OverviewExcelExporterTest(unittest.TestCase):
 
 
 class LotWorkOrderExcelExporterTest(unittest.TestCase):
+    def test_hydration_payload_has_single_and_split_configuration_sheets(self) -> None:
+        single_columns = [
+            "배정", "Q코드", "P코드", "체크시트(LOT)", "LOT수량",
+        ]
+        split_columns = [*single_columns, "배정수량"]
+        single_rows = [{
+            "배정": "단일구성",
+            "Q코드": "Q0001",
+            "P코드": "P0001",
+            "체크시트(LOT)": "S20260904-001",
+            "LOT수량": 1719,
+            "배정수량": 1719,
+        }]
+        split_rows = [{
+            **single_rows[0],
+            "배정": "분할구성 1/2",
+            "배정수량": 700,
+        }]
+        payload = build_hydration_lot_work_order_export_payload(
+            single_rows,
+            split_rows,
+            single_columns,
+            split_columns,
+        )
+
+        self.assertEqual(
+            [sheet["name"] for sheet in payload["sheets"]],
+            ["단일구성", "분할구성"],
+        )
+        self.assertEqual(payload["sheets"][0]["columns"], single_columns)
+        self.assertEqual(payload["sheets"][1]["columns"], split_columns)
+        self.assertEqual(payload["sheets"][0]["rows"][0][-1], 1719)
+        self.assertEqual(payload["sheets"][1]["rows"][0][-1], 700)
+
+    def test_hydration_workbook_writes_two_configuration_sheets(self) -> None:
+        columns = ["배정", "Q코드", "P코드", "체크시트(LOT)", "LOT수량"]
+        row = {
+            "배정": "단일구성",
+            "Q코드": "Q0001",
+            "P코드": "P0001",
+            "체크시트(LOT)": "S20260904-001",
+            "LOT수량": 1719,
+            "배정수량": 1719,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "260904_LOT작업순서_하이드레이션.xlsx"
+            export_hydration_lot_work_order_workbook(
+                [row],
+                [{**row, "배정": "분할구성 1/2", "배정수량": 700}],
+                columns,
+                [*columns, "배정수량"],
+                output_path=output,
+            )
+            with zipfile.ZipFile(output) as archive:
+                workbook = ET.fromstring(archive.read("xl/workbook.xml"))
+                names = [
+                    sheet.attrib["name"]
+                    for sheet in workbook.findall(
+                        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"
+                    )
+                ]
+                self.assertEqual(names, ["단일구성", "분할구성"])
+                table_namespace = {
+                    "x": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+                }
+                single_table = ET.fromstring(archive.read("xl/tables/table1.xml"))
+                split_table = ET.fromstring(archive.read("xl/tables/table2.xml"))
+                single_headers = [
+                    column.attrib["name"]
+                    for column in single_table.findall(".//x:tableColumn", table_namespace)
+                ]
+                split_headers = [
+                    column.attrib["name"]
+                    for column in split_table.findall(".//x:tableColumn", table_namespace)
+                ]
+                self.assertEqual(single_headers[1:4], ["Q코드", "P코드", "체크시트(LOT)"])
+                self.assertEqual(single_headers[-1], "LOT수량")
+                self.assertEqual(split_headers[-2:], ["LOT수량", "배정수량"])
+
     def test_payload_moves_injection_downstream_code_to_hidden_right_edge(self) -> None:
         rows = [{
             "구분": "추가사출",
