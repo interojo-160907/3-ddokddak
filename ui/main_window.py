@@ -104,6 +104,7 @@ from services.collection_schedule import load_schedule, save_schedule
 from services.dashboard_service import DashboardService
 from services.process_status_service import ProcessStatusService, business_sort_key, classification_sort_key
 from services.program_gate import DEFAULT_UPDATE_URL, ProgramGate
+from services.program_presence import PRESENCE_INTERVAL_MS, ProgramPresence
 from services.api_health import check_collection_apis
 from ui.bom_page import BomStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
@@ -1285,6 +1286,13 @@ class MainWindow(QMainWindow):
         self.permission_check_timer.timeout.connect(self._start_runtime_permission_check)
         self.permission_check_timer.start()
         QTimer.singleShot(3_000, self._start_runtime_permission_check)
+        self.program_presence = ProgramPresence(APP_VERSION)
+        self.presence_timer = QTimer(self)
+        self.presence_timer.setInterval(PRESENCE_INTERVAL_MS)
+        self.presence_timer.timeout.connect(self.program_presence.heartbeat)
+        self.presence_timer.start()
+        QTimer.singleShot(3_000, self.program_presence.heartbeat)
+        QApplication.instance().aboutToQuit.connect(self.program_presence.close)
         self.notice_check_timer = QTimer(self)
         self.notice_check_timer.setInterval(15_000)
         self.notice_check_timer.timeout.connect(self._start_notice_check)
@@ -1791,7 +1799,8 @@ class MainWindow(QMainWindow):
             self.notice_check_timer.stop()
         if hasattr(self, "api_health_timer"):
             self.api_health_timer.stop()
-        ProgramGate(APP_VERSION, timeout=2).set_connection(False)
+        self.presence_timer.stop()
+        self.program_presence.close()
         self._permission_check_executor.shutdown(wait=False, cancel_futures=True)
         self._notice_check_executor.shutdown(wait=False, cancel_futures=True)
         self._api_health_executor.shutdown(wait=False, cancel_futures=True)
@@ -1813,7 +1822,7 @@ class MainWindow(QMainWindow):
         self._permission_check_future = self._permission_check_executor.submit(
             gate.check,
             allow_cache_fallback=False,
-            report_connection=True,
+            report_connection=False,
         )
         QTimer.singleShot(200, self._finish_runtime_permission_check)
 

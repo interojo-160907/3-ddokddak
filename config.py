@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from services.data_location import resolve_data_root
@@ -8,8 +9,11 @@ from services.data_location import resolve_data_root
 
 APP_NAME = "똑딱이 생산3팀"
 APP_DISPLAY_NAME = "똑딱이 - 생산3팀 전용"
-APP_VERSION = "2.3"
-APP_USER_MODEL_ID = "Ddokddak.ProductionTeam3.Source"
+APP_VERSION = "2.4"
+APP_USER_MODEL_ID = (
+    "Ddokddak.ProductionTeam3" if getattr(sys, "frozen", False)
+    else "Ddokddak.ProductionTeam3.Source"
+)
 DEFAULT_FACTORY = "S관"
 
 # SCM Control Tower의 중앙 저장소와 공유하지 않는 생산3팀 전용 API 저장소입니다.

@@ -141,7 +141,7 @@ class ProgramGate:
             payload.update(
                 {
                     "connected": True,
-                    "connection_status": "접속중",
+                    "connection_status": "🟢 사용중",
                     "heartbeat_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                 }
             )
@@ -235,7 +235,7 @@ class ProgramGate:
             {
                 "action": "presence",
                 "connected": bool(connected),
-                "connection_status": "접속중" if connected else "",
+                "connection_status": "🟢 사용중" if connected else "🔴 미사용",
                 "heartbeat_at": datetime.now().astimezone().isoformat(timespec="seconds"),
             }
         )

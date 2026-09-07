@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "2.3"
+#define MyAppVersion "2.4"
 #define MyAppExeName "gui_app_pyside6.exe"
 #define MySourceDir "..\dist\production3"
 
@@ -47,9 +47,9 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Source: "{#MySourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: startup
+Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "Ddokddak.ProductionTeam3"
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "Ddokddak.ProductionTeam3"; Tasks: desktopicon
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; AppUserModelID: "Ddokddak.ProductionTeam3"; Tasks: startup
 
 [Tasks]
 Name: "desktopicon"; Description: "바탕화면에 똑딱이 바로가기 만들기"; GroupDescription: "바로가기 및 자동 실행:"; Flags: checkedonce
