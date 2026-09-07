@@ -520,9 +520,9 @@ class LotWorkOrderPage(ProcessOverviewPage):
             if filtered_row is None:
                 continue
             category = str(filtered_row.get("신규분류요약") or "미확인").strip() or "미확인"
-            quantities[category] = quantities.get(category, 0.0) + float(
-                filtered_row.get("재고수량") or 0
-            )
+            quantities.setdefault(category, 0.0)
+            if self.fixed_process is not None or filtered_row.get("_공정") == "누수규격":
+                quantities[category] += float(filtered_row.get("재고수량") or 0)
         if "전체" not in selected and not (selected & set(quantities)):
             selected = {"전체"}
         self.lot_classification_buttons = {}
@@ -540,7 +540,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
             button.setMinimumWidth(90)
             button.setCheckable(True)
             button.setProperty("classification", category)
-            button.setToolTip(f"{category} · {quantity:,.0f} pcs")
+            button.setToolTip(f"{category} · {self.fixed_process or '누수규격'} 기준 {quantity:,.0f} pcs")
             button.setChecked(category in selected or (category == "전체" and selected == {"전체"}))
             button.clicked.connect(
                 lambda _checked=False, selected_button=button: self._classification_changed(selected_button)

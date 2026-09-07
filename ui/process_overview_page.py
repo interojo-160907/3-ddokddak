@@ -639,11 +639,10 @@ class DueDetailPage(QWidget):
         selected = self._selected_classifications()
         categories = sorted({str(row.get("신규분류요약") or "").strip() for row in rows if row.get("신규분류요약")}, key=classification_sort_key)
         process = self._selected_process()
+        quantity_process = "누수규격" if process == "전체" else process
         quantities = {
             category: sum(
-                float(row.get("공정", {}).get(process, 0) or 0)
-                if process != "전체"
-                else self._whole_process_quantity(row)
+                float(row.get("공정", {}).get(quantity_process, 0) or 0)
                 for row in rows if str(row.get("신규분류요약") or "").strip() == category
             )
             for category in categories
@@ -660,7 +659,7 @@ class DueDetailPage(QWidget):
             button.setStyleSheet(CLASSIFICATION_BUTTON_STYLE)
             button.setCheckable(True)
             button.setProperty("classification", category)
-            button.setToolTip(f"{category} · 현재 조건 부족수량 {format_number(quantity)} pcs")
+            button.setToolTip(f"{category} · {quantity_process} 기준 {format_number(quantity)} pcs")
             button.setChecked(category in selected or (category == "전체" and not (selected & set(categories))))
             button.clicked.connect(lambda _checked=False, selected_button=button: self._classification_changed(selected_button))
             row, column = divmod(index, 6)
