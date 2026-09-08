@@ -8,7 +8,7 @@ import os
 import sys
 import traceback
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication
 
@@ -24,6 +24,7 @@ from ui.main_window import APP_VERSION, MainWindow
 from ui.message_dialog import ask_app_confirmation
 from ui.permission_dialog import show_permission_denied
 from ui.startup_splash import StartupSplash
+from services.windows_icon import apply_taskbar_icon
 
 
 COLLECTOR_MODULES = {
@@ -95,7 +96,8 @@ def configure_windows_identity() -> None:
     if sys.platform != "win32":
         return
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+        identity = APP_USER_MODEL_ID + (".Preview26" if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" else "")
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(identity)
     except (AttributeError, OSError):
         pass
 
@@ -181,6 +183,8 @@ def main() -> int:
     frame.moveCenter(screen.center())
     window.move(frame.topLeft())
     splash.finish(window)
+    apply_taskbar_icon(window, ASSET_DIR / "ddokddak_app_icon.ico")
+    QTimer.singleShot(250, lambda: apply_taskbar_icon(window, ASSET_DIR / "ddokddak_app_icon.ico"))
     return app.exec()
 
 

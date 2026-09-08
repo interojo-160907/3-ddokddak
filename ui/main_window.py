@@ -106,6 +106,7 @@ from services.process_status_service import ProcessStatusService, business_sort_
 from services.program_gate import DEFAULT_UPDATE_URL, ProgramGate
 from services.program_presence import PRESENCE_INTERVAL_MS, ProgramPresence
 from services.api_health import check_collection_apis
+from services import safe_mode
 from ui.bom_page import BomStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
 from ui.notice_ticker import NoticeTicker
@@ -1228,7 +1229,10 @@ class MainWindow(QMainWindow):
 
     def __init__(self, management_notices: list[dict[str, Any]] | tuple[dict[str, Any], ...] = ()) -> None:
         super().__init__()
-        self.setWindowTitle("똑딱이 - 생산3팀 전용")
+        self.setWindowTitle(f"똑딱이 - 생산3팀 전용 v{APP_VERSION}")
+        self._mode_error = ""
+        self._mode_future = None
+        self._mode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ddokddak-mode")
         self.setMinimumSize(1040, 680)
         self.resize(1420, 860)
         self.page_definitions = {page.key: page for page in PAGES}
@@ -1263,6 +1267,7 @@ class MainWindow(QMainWindow):
             thread_name_prefix="ddokddak-api-health",
         )
         self._build_shell()
+        self._sync_mode_controls()
         self.notice_ticker.replace_notices(self.management_notices)
         self.show_page("dashboard")
         self._data_db_signatures = self._current_data_db_signatures()
@@ -1306,6 +1311,95 @@ class MainWindow(QMainWindow):
         self._apply_collection_timers(run_initial=True)
         QTimer.singleShot(5_000, lambda: self._run_global_refresh(reset_filters=False))
         QTimer.singleShot(20_000, lambda: self._start_data_cleanup(scheduled=True))
+        self.mode_timer = QTimer(self)
+        self.mode_timer.setInterval(15_000)
+        self.mode_timer.timeout.connect(self._start_mode_check)
+        self.mode_timer.start()
+        self.mode_result_timer = QTimer(self)
+        self.mode_result_timer.setInterval(250)
+        self.mode_result_timer.timeout.connect(self._finish_mode_check)
+        self.mode_result_timer.start()
+        QTimer.singleShot(500, self._start_mode_check)
+        QApplication.instance().aboutToQuit.connect(lambda: self._mode_executor.shutdown(wait=False, cancel_futures=True))
+
+    def _start_mode_check(self) -> None:
+        if self._mode_future is not None:
+            return
+        current = safe_mode.active()
+        def work():
+            fixture = os.getenv("DDOKDDAK_PREVIEW_CONTROL", "") if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" else ""
+            control = json.loads(Path(fixture).read_text(encoding="utf-8")) if fixture else safe_mode.fetch_control()
+            mode = control.get("mode")
+            if mode not in {"안전모드", "자동모드"}:
+                raise ValueError("전체설정 C열은 자동모드 또는 안전모드여야 합니다.")
+            if mode == "안전모드":
+                asset = control.get("safe_asset") or {}
+                selection = asset.get("selection_id", asset.get("name"))
+                if current and current.get("selection_id") == selection and current.get("snapshot_revision") == safe_mode.SNAPSHOT_REVISION:
+                    return mode, None
+                return mode, safe_mode.prepare(asset)
+            if current:
+                import sqlite3
+                automatic = DATA_CENTER_DIR / "process-status" / "aps_process_status.sqlite"
+                with sqlite3.connect(f"file:{automatic.as_posix()}?mode=ro", uri=True) as con:
+                    if not con.execute("SELECT COUNT(*) FROM aps_plan").fetchone()[0]:
+                        raise RuntimeError("자동모드 APS 데이터가 비어 있습니다. 안전모드를 유지합니다.")
+                aps = self._read_refresh_status(DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json")
+                live = self._read_refresh_status(DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json")
+                if not live.get("aps_source_refreshed_at") or not (DATA_CENTER_DIR / "live-production-need" / "current_production_need.sqlite").is_file():
+                    raise RuntimeError("자동모드 복귀 대기: 기존 실시간 계산 데이터가 없습니다.")
+                # Restore normal behavior, including its existing WIP-wait indicator.
+                # Never relabel an older live calculation as the latest APS cycle.
+            return mode, None
+        self._mode_future = self._mode_executor.submit(work)
+
+    def _finish_mode_check(self) -> None:
+        if self._mode_future is None or not self._mode_future.done():
+            return
+        future, self._mode_future = self._mode_future, None
+        previous = safe_mode.active()
+        try:
+            mode, prepared = future.result()
+            self._mode_error = ""
+            if prepared:
+                safe_mode.activate(prepared)
+            elif mode == "자동모드" and previous:
+                safe_mode.deactivate()
+            if previous != safe_mode.active():
+                try:
+                    self._sync_mode_controls()
+                    self._reload_changed_data_views({"aps", "live"})
+                except Exception:
+                    if previous:
+                        safe_mode.activate(previous)
+                    else:
+                        safe_mode.deactivate()
+                    self._sync_mode_controls()
+                    self._reload_changed_data_views({"aps", "live"})
+                    raise
+            if mode == "자동모드":
+                safe_mode.cleanup()
+        except Exception as exc:
+            self._mode_error = str(exc)
+        self._refresh_header_status()
+
+    def _sync_mode_controls(self) -> None:
+        enabled = not bool(safe_mode.active())
+        keys = {"live_need", "lot_work_order", *self.LIVE_PROCESS_NAV, *self.LOT_PROCESS_NAV}
+        for key in keys:
+            button = self.nav_buttons.get(key)
+            if button is not None:
+                button.setEnabled(enabled)
+                button.setStyleSheet("" if enabled else "QPushButton { color:#A0A8B5; background:#F1F3F6; border-radius:8px; }")
+                button.setToolTip("" if enabled else "안전모드에서는 실시간 실적 반영·LOT 작업순서를 사용할 수 없습니다.")
+            index = self.page_indexes.get(key)
+            if index is not None:
+                self.stack.widget(index).setEnabled(enabled)
+        for name in ("live_process_toggle", "lot_process_toggle"):
+            if hasattr(self, name):
+                getattr(self, name).setEnabled(enabled)
+        if not enabled and self._current_page in keys:
+            self.show_page("process_overview")
 
     @staticmethod
     def _database_signature(path: Path) -> tuple[int, int] | None:
@@ -1395,6 +1489,8 @@ class MainWindow(QMainWindow):
         self._refresh_header_status()
 
     def _start_aps_monitor_check(self) -> None:
+        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1":
+            return
         if (
             hasattr(self, "settings_collection_process")
             and self.settings_collection_process.state() != QProcess.NotRunning
@@ -1907,6 +2003,8 @@ class MainWindow(QMainWindow):
         self.page_indexes[key] = self.stack.addWidget(page)
 
     def show_page(self, key: str) -> None:
+        if safe_mode.active() and (key in {"live_need", "lot_work_order"} or key in self.LIVE_PROCESS_NAV or key in self.LOT_PROCESS_NAV):
+            key = "process_overview"
         requested_key = key
         actual_key = key
         definition_key = (
@@ -1974,6 +2072,13 @@ class MainWindow(QMainWindow):
         ) and hasattr(self, "live_need_page"):
             aps_fresh = self.live_need_page.service.status().get("aps_source_refreshed_at") or aps_fresh
         self.header_meta.setText(f"APS 갱신  {aps_fresh}")
+        info = safe_mode.active()
+        if info:
+            self.header_meta.setText(f"안전모드 · {info['label']}")
+        self.header_meta.setStyleSheet("QLabel { color:#9A5700; background:#FFF5DF; border:1px solid #E8BF6A; border-radius:8px; padding:7px 12px; }" if info else "")
+        if self._mode_error:
+            self.header_meta.setText(self.header_meta.text() + " · 모드 확인 필요")
+        self.header_meta.setToolTip(self._mode_error or (info.get("name", "") if info else "전체설정 C열 자동모드"))
         api_collection_ready = all(
             self.dashboard_data.get(status_key, {}).get("status") in {"success", "skipped"}
             for status_key in ("aps_status", "production_status", "bom_status")
@@ -2514,6 +2619,7 @@ class MainWindow(QMainWindow):
             qta.icon("fa6s.bolt", color="#087A55"),
             "실시간 실적 반영에서 수주번호 검색",
         )
+        live_action.setEnabled(not bool(safe_mode.active()))
         selected_action = menu.exec(global_pos)
         if selected_action is detail_action:
             self._show_order_detail(order_no)
@@ -2698,7 +2804,9 @@ class MainWindow(QMainWindow):
                 f" · {'작업완료' if order.get('work_completed') else '진행 중'}"
             )
         else:
-            summary_text += " · 실시간 계산 대기"
+            summary_text += " · 안전모드 조회" if safe_mode.active() else " · 실시간 계산 대기"
+        if safe_mode.active():
+            summary_text = summary_text.replace(f"수주수량 {float(order.get('order_qty') or 0):,.0f} pcs", "수주수량 원본 미제공")
         self.order_detail_summary.setText(summary_text + " · 포장 제외")
         remark = str(order.get("remark") or "").strip()
         self.order_detail_remark.setText(f"비고  {remark}")
@@ -2740,8 +2848,8 @@ class MainWindow(QMainWindow):
                 top.addWidget(product_state)
             card_layout.addLayout(top)
             quantity = QLabel(
-                f"수주 {float(row.get('order_qty') or 0):,.0f} pcs · "
-                f"규격 {int(row.get('spec_count') or 0):,}개"
+                ("수주수량 원본 미제공 · " if safe_mode.active() else f"수주 {float(row.get('order_qty') or 0):,.0f} pcs · ")
+                + f"규격 {int(row.get('spec_count') or 0):,}개"
             )
             quantity.setObjectName("OrderItemQuantity")
             card_layout.addWidget(quantity)
@@ -2762,7 +2870,7 @@ class MainWindow(QMainWindow):
                 elif row.get("live_available"):
                     value_text = "완료" if current_shortage <= 0 else f"현재 {current_shortage:,.0f}"
                 else:
-                    value_text = "완료" if aps_shortage <= 0 else f"{aps_shortage:,.0f} 부족"
+                    value_text = ("계획 없음" if safe_mode.active() else "완료") if aps_shortage <= 0 else f"{aps_shortage:,.0f} 부족"
                 value = QLabel(value_text)
                 value.setObjectName("OrderProcessStatus")
                 completed = (
@@ -5243,6 +5351,8 @@ class MainWindow(QMainWindow):
             self._start_data_collection(source, scheduled=True)
 
     def _start_data_cleanup(self, _checked: bool = False, *, scheduled: bool = False) -> None:
+        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1":
+            return
         if hasattr(self, "data_cleanup_process") and self.data_cleanup_process.state() != QProcess.NotRunning:
             return
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
@@ -5344,6 +5454,8 @@ class MainWindow(QMainWindow):
                 button.setEnabled(True)
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
+        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1":
+            return  # The existing installed app remains the collector during parallel review.
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             if not scheduled:
                 self.settings_data_status.setText("다른 데이터 수집이 진행 중입니다. 완료 후 다시 실행해 주세요.")

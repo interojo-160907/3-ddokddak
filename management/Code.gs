@@ -99,6 +99,10 @@ function doPost(e) {
       text_(row[u.pc]).toUpperCase() === pcId &&
       text_(row[u.program]) === program);
     const allowed = allowed_(user, u.use);
+    if (request.action === 'mode') {
+      if (!allowed) throw new Error('등록되지 않았거나 사용이 중지된 PC입니다.');
+      return json_({ok: true, result: safeModeControl_(spreadsheet, program)});
+    }
 
     // 이전 설치판의 접속 신호도 받되, 기록 실패로 권한을 바꾸지 않습니다.
     if (typeof request.connected === 'boolean') {
@@ -184,4 +188,3 @@ function setupPresence() {
   }
   console.log('완료: 접속여부 자동 정리 등록 (30분 간격)');
 }
-

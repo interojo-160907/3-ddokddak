@@ -9,7 +9,7 @@ from services.data_location import resolve_data_root
 
 APP_NAME = "똑딱이 생산3팀"
 APP_DISPLAY_NAME = "똑딱이 - 생산3팀 전용"
-APP_VERSION = "2.5"
+APP_VERSION = "2.6"
 APP_USER_MODEL_ID = (
     "Ddokddak.ProductionTeam3" if getattr(sys, "frozen", False)
     else "Ddokddak.ProductionTeam3.Source"
@@ -47,6 +47,7 @@ def collection_directories(root: Path) -> tuple[Path, ...]:
         root / "live-production-need" / "snapshot",
         root / "live-production-need" / "backup",
         root / "settings",
+        root / "안전모드",
     )
 
 

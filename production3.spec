@@ -16,6 +16,9 @@ a = Analysis(
     ],
     hiddenimports=[
         *collect_submodules("xlsxwriter"),
+        *collect_submodules("openpyxl"),
+        "services.safe_mode",
+        "services.windows_icon",
         "collectors.aps_update_monitor",
         "collectors.bom_snapshot_collector",
         "collectors.data_retention_cleanup",

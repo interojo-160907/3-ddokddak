@@ -33,6 +33,10 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -m unittest discover -s tests -v
 
+      - name: Test central safe mode selection
+        shell: pwsh
+        run: node management/test_safe_mode.cjs
+
       - name: Build application
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean production3.spec

@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from config import DATA_CENTER_DIR
+from services import safe_mode
 
 
 ROOT = DATA_CENTER_DIR
@@ -29,6 +30,8 @@ def _channel(demand_type: object, initial: object, destination: object = "") -> 
     initial_text = str(initial or "").strip()
     if "안전" in demand or "안전" in initial_text:
         return "안전재고"
+    if demand == "이니셜":
+        return "해외"
     if demand == "국내" or (not str(destination or "").strip() and demand != "PB"):
         return "국내"
     return "해외"
@@ -49,9 +52,9 @@ def _connect(path: Path) -> sqlite3.Connection:
 
 def _live_cycle_matches() -> bool:
     """실시간 계산이 현재 APS 회차를 기준으로 만들어졌는지 확인한다."""
-    if not LIVE_DB.is_file():
+    if safe_mode.active() or not LIVE_DB.is_file():
         return False
-    aps_cycle = str(_status(APS_STATUS).get("source_refreshed_at") or "").strip()
+    aps_cycle = str(_status(safe_mode.status_path(APS_STATUS)).get("source_refreshed_at") or "").strip()
     live_status = _status(LIVE_STATUS)
     live_cycle = str(live_status.get("aps_source_refreshed_at") or "").strip()
     return bool(
@@ -76,7 +79,7 @@ def _order_remarks(connection: sqlite3.Connection) -> dict[str, str]:
 
 class DashboardService:
     def available(self) -> bool:
-        return APS_DB.is_file() and PRODUCTION_DB.is_file()
+        return safe_mode.database(APS_DB).is_file() and PRODUCTION_DB.is_file()
 
     def load(self) -> dict:
         result = {
@@ -110,12 +113,12 @@ class DashboardService:
             "production_periods": {},
             "default_production_period": "previous" if date.today().day == 1 else "current",
             "risks": [],
-            "aps_status": _status(APS_STATUS),
+            "aps_status": _status(safe_mode.status_path(APS_STATUS)),
             "live_status": _status(LIVE_STATUS),
             "production_status": _status(PRODUCTION_STATUS),
             "bom_status": _status(BOM_STATUS),
         }
-        if APS_DB.is_file():
+        if safe_mode.database(APS_DB).is_file():
             self._load_aps(result)
             self._apply_live_risk_status(result)
         if PRODUCTION_DB.is_file():
@@ -123,10 +126,10 @@ class DashboardService:
         return result
 
     def order_details(self, order_no: str) -> dict:
-        if not APS_DB.is_file() or not str(order_no).strip():
+        if not safe_mode.database(APS_DB).is_file() or not str(order_no).strip():
             return {"order": {}, "items": []}
         normalized_order = str(order_no).strip()
-        with closing(_connect(APS_DB)) as connection:
+        with closing(_connect(safe_mode.database(APS_DB))) as connection:
             remarks = _order_remarks(connection)
             source = connection.execute(
                 "SELECT so_id,MAX(initial) initial,MIN(due_date) due_date,MAX(cust_name) cust_name,"
@@ -293,7 +296,7 @@ class DashboardService:
 
     @staticmethod
     def _load_aps(result: dict) -> None:
-        with closing(_connect(APS_DB)) as connection:
+        with closing(_connect(safe_mode.database(APS_DB))) as connection:
             remarks = _order_remarks(connection)
             for row in connection.execute(
                 "SELECT oper_id,SUM(COALESCE(plan_qty,0)) qty FROM aps_plan "

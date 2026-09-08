@@ -7,6 +7,7 @@ data/
 logs/
 screenshots/
 qa/
+outputs/
 _백업/
 
 installer/output/

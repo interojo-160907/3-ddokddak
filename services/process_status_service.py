@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 
 from config import DATA_CENTER_DIR
+from services import safe_mode
 
 
 DATA_DIR = Path(
@@ -121,6 +122,8 @@ def business_sort_key(row: dict) -> tuple:
 
 def _channel(demand_type: str, destination: str) -> str:
     demand = str(demand_type or "").strip()
+    if demand == "이니셜":
+        return "해외"
     if demand == "PB":
         return "PB"
     if demand in {"안전", "안전(국내)", "안전(해외)", "안전재고(국내)", "안전재고(해외)"}:
@@ -137,8 +140,16 @@ class ProcessStatusService:
         database_path: Path | str | None = None,
         status_path: Path | str | None = None,
     ) -> None:
-        self.database_path = Path(database_path) if database_path else DB_PATH
-        self.status_path = Path(status_path) if status_path else STATUS_PATH
+        self._database_path = Path(database_path) if database_path else None
+        self._status_path = Path(status_path) if status_path else None
+
+    @property
+    def database_path(self) -> Path:
+        return self._database_path if self._database_path is not None else safe_mode.database(DB_PATH)
+
+    @property
+    def status_path(self) -> Path:
+        return self._status_path if self._status_path is not None else safe_mode.status_path(STATUS_PATH)
 
     def status(self) -> dict:
         try:
@@ -208,7 +219,7 @@ class ProcessStatusService:
                 key,
                 {
                     "신규분류요약": key[2], "이니셜": key[1], "수주번호": key[0],
-                    "품목코드": key[3], "T코드": key[3], "P코드": "", "Q코드": "", "R코드": "",
+                    "품목코드": key[3], "T코드": key[3] if str(key[3]).startswith("T") else "", "P코드": "", "Q코드": "", "R코드": "",
                     "품명": key[4], "품명판매": key[4], "품명P": "", "품명Q": "", "품명R": "",
                     "POWER": specs["POWER"], "CP": specs["CP"], "AXIS": specs["AXIS"],
                     "ADD": specs["ADD"], "납기일": key[5],
@@ -242,6 +253,10 @@ class ProcessStatusService:
                             target[field] = code_specs[field]
                             target[f"_{field}_NUM"] = code_specs[f"_{field}_NUM"]
             target[PROCESS_NAMES.get(str(item["oper_id"]), str(item["oper_id"]))] += float(item["plan_qty"] or 0)
+        for row in grouped.values():
+            if str(row['품목코드']).startswith('EXCEL:'):
+                row['품목코드'] = row['R코드'] or row['Q코드'] or row['P코드']
+                row['_제품정렬'] = row['품명판매']
         return sorted(grouped.values(), key=business_sort_key)
 
     def summary(self, rows: list[dict]) -> dict:
