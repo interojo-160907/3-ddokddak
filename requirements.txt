@@ -6,3 +6,4 @@ pypdf>=5.0
 pypdfium2>=4.30
 XlsxWriter>=3.2
 openpyxl>=3.1
+numpy==2.3.1

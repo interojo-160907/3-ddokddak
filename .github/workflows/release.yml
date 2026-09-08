@@ -41,7 +41,21 @@ jobs:
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean production3.spec
 
-      - name: Build installer
+      - name: Test packaged executable
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'package-smoke.json'
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $process = Start-Process 'dist\production3\gui_app_pyside6.exe' -ArgumentList '--package-smoke-test', ('"' + $report + '"') -WindowStyle Hidden -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            Stop-Process -Id $process.Id -Force
+            throw 'Packaged executable failed to finish startup smoke test.'
+          }
+          if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report)) { throw 'Packaged executable smoke test failed.' }
+          if (-not (Get-Content -LiteralPath $report -Raw | ConvertFrom-Json).ok) { throw 'Invalid smoke result.' }
+          Get-Content -LiteralPath $report
+
+      - name: Compile installer
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"

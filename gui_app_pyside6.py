@@ -114,6 +114,9 @@ def hide_collector_process_window() -> None:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--package-smoke-test":
+        from services.package_smoke_test import run
+        return run(sys.argv[2])
     if len(sys.argv) >= 3 and sys.argv[1] == "--collector":
         hide_collector_process_window()
         return run_collector_mode(sys.argv[2:])

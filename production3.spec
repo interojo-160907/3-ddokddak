@@ -18,6 +18,7 @@ a = Analysis(
         *collect_submodules("xlsxwriter"),
         *collect_submodules("openpyxl"),
         "services.safe_mode",
+        "numpy",
         "services.windows_icon",
         "collectors.aps_update_monitor",
         "collectors.bom_snapshot_collector",
