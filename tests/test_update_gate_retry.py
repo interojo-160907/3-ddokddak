@@ -42,3 +42,29 @@ class UpdateGateRetryTests(unittest.TestCase):
         post.return_value = response
         self.assertEqual(self.gate.check(allow_cache_fallback=False).reason, 'denied')
         post.assert_called_once()
+
+    @patch('services.program_gate.requests.post')
+    def test_script_failure_is_not_permission_revocation(self, post):
+        response = Mock(status_code=200)
+        response.json.return_value = {'ok':False,'result':{'allowed':False,'message':'sheet error'}}
+        post.return_value = response
+        result = self.gate.check(allow_cache_fallback=False)
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.reason, 'network')
+
+    @patch('services.program_gate.requests.post')
+    def test_sheet_rollback_does_not_require_downgrade(self, post):
+        self.gate.current_version = '2.6.2'
+        response = Mock(status_code=200)
+        response.json.return_value = {'ok':True,'result':{'allowed':True,'latest_version':'v2.6.1','update_required':True}}
+        post.return_value = response
+        result = self.gate.check(allow_cache_fallback=False)
+        self.assertTrue(result.allowed)
+        self.assertFalse(result.update_required)
+
+    @patch('services.program_gate.requests.post')
+    def test_missing_permission_is_invalid_response(self, post):
+        response = Mock(status_code=200)
+        response.json.return_value = {}
+        post.return_value = response
+        self.assertEqual(self.gate.check(allow_cache_fallback=False).reason, 'network')

@@ -163,8 +163,12 @@ class ProgramGate:
             response.raise_for_status()
             body = response.json()
             data = body.get("result", body) if isinstance(body, dict) else {}
-            if not isinstance(data, dict):
+            if not isinstance(body, dict) or not isinstance(data, dict):
                 raise ValueError("관리 API 응답 형식이 올바르지 않습니다.")
+            if body.get("ok") is False:
+                raise ValueError(data.get("message") or "관리 API 처리 오류")
+            if "allowed" not in data and "use_allowed" not in data:
+                raise ValueError("관리 API 권한 응답이 누락되었습니다.")
         except (requests.RequestException, ValueError, TypeError) as exc:
             cached = self._cached_result() if allow_cache_fallback else None
             if cached is not None:
