@@ -95,7 +95,7 @@ def _update_url(value: object) -> str:
 
 
 class ProgramGate:
-    def __init__(self, current_version: str, timeout: int = 8) -> None:
+    def __init__(self, current_version: str, timeout: int = 30) -> None:
         self.current_version = current_version
         self.timeout = timeout
         self.endpoint = resolve_management_api_url()
@@ -146,12 +146,20 @@ class ProgramGate:
                 }
             )
         try:
-            response = requests.post(
-                self.endpoint,
-                json=payload,
-                timeout=(3, self.timeout),
-                headers={"User-Agent": "Ddokddak-Production3-Gate"},
-            )
+            for attempt in range(2):
+                try:
+                    response = requests.post(
+                        self.endpoint,
+                        json=payload,
+                        timeout=(5, self.timeout),
+                        headers={"User-Agent": "Ddokddak-Production3-Gate"},
+                    )
+                    if response.status_code in {429, 502, 503, 504} and attempt == 0:
+                        continue
+                    break
+                except (requests.Timeout, requests.ConnectionError):
+                    if attempt == 1:
+                        raise
             response.raise_for_status()
             body = response.json()
             data = body.get("result", body) if isinstance(body, dict) else {}

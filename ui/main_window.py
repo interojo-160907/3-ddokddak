@@ -1915,7 +1915,7 @@ class MainWindow(QMainWindow):
         if manual and hasattr(self, "settings_update_button"):
             self.settings_update_button.setEnabled(False)
             self.settings_update_button.setText("확인 중…")
-        gate = ProgramGate(APP_VERSION, timeout=8)
+        gate = ProgramGate(APP_VERSION, timeout=30)
         self._permission_check_future = self._permission_check_executor.submit(
             gate.check,
             allow_cache_fallback=False,
