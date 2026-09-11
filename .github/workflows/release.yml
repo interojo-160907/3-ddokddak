@@ -35,7 +35,9 @@ jobs:
 
       - name: Test central safe mode selection
         shell: pwsh
-        run: node management/test_safe_mode.cjs
+        run: |
+          node management/test_safe_mode.cjs
+          node management/test_multi_program.cjs
 
       - name: Build application
         shell: pwsh

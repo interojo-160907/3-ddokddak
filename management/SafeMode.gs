@@ -37,6 +37,9 @@ function safeModeControl_(spreadsheet, program) {
       properties.deleteProperty(key);
       return {mode: mode};
     }
+    if (program !== '생산3공장 똑딱이') {
+      throw new Error(program + '의 안전모드 자료 저장소가 등록되지 않았습니다. 해당 프로그램은 자동모드를 사용하세요.');
+    }
     const saved = properties.getProperty(key);
     if (saved) return {mode: mode, safe_asset: JSON.parse(saved)};
     const repo = 'interojo-160907/3-ddokddak';

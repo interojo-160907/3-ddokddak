@@ -8,13 +8,13 @@ from pathlib import Path
 
 try:
     from collectors.bom_snapshot_collector import refresh as refresh_bom
-    from collectors.process_status_collector import refresh as refresh_aps
+    from collectors.aps_update_monitor import check_and_refresh as refresh_aps
     from collectors.production_performance_collector import refresh as refresh_production
     from collectors.live_production_need_collector import refresh as refresh_live
     from services.data_location import resolve_data_root
 except ImportError:
     from bom_snapshot_collector import refresh as refresh_bom
-    from process_status_collector import refresh as refresh_aps
+    from aps_update_monitor import check_and_refresh as refresh_aps
     from production_performance_collector import refresh as refresh_production
     from live_production_need_collector import refresh as refresh_live
     from services.data_location import resolve_data_root

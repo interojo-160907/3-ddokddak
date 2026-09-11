@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import APP_DISPLAY_NAME, APP_NAME, APP_VERSION, ASSET_DIR, DATA_CENTER_DIR, DEFAULT_FACTORY, LEAD_SHEET_PDF_BACKUP_DIR, ROOT_DIR
+from services.collection_health import recovered, collection_ready
 
 
 def _collector_executable() -> str:
@@ -2079,17 +2080,17 @@ class MainWindow(QMainWindow):
         if self._mode_error:
             self.header_meta.setText(self.header_meta.text() + " · 모드 확인 필요")
         self.header_meta.setToolTip(self._mode_error or (info.get("name", "") if info else "전체설정 C열 자동모드"))
-        api_collection_ready = all(
-            self.dashboard_data.get(status_key, {}).get("status") in {"success", "skipped"}
-            for status_key in ("aps_status", "production_status", "bom_status")
-        )
+        api_collection_ready = collection_ready(
+            self.dashboard_data, self._read_collection_errors(),
+            getattr(self, "_api_health_results", {}),
+        ) and not self._mode_error
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText(
             "●  수집 전체 양호" if api_collection_ready else "●  수집 상태 확인 필요"
         )
         if api_collection_ready:
             self.data_status.setCursor(Qt.ArrowCursor)
-            self.data_status.setToolTip("BOM·APS·생산실적 수집이 모두 정상입니다.")
+            self.data_status.setToolTip("BOM·APS·생산실적·WIP의 마지막 수집이 정상이며 확인된 접속 오류가 없습니다.")
             self.data_status.setStyleSheet(
                 "QPushButton { background:#ECFDF5; color:#087F5B; border:1px solid #9CE2C5; "
                 "border-radius:10px; padding:7px 14px; font-weight:700; }"
@@ -5043,6 +5044,11 @@ class MainWindow(QMainWindow):
                 )
                 if inferred and key != inferred:
                     continue
+                folders = {"bom": "bom", "aps": "process-status", "production": "production-performance", "live": "live-production-need"}
+                if key in folders:
+                    status = cls._read_refresh_status(DATA_CENTER_DIR / folders[key] / "snapshot" / "refresh_status.json")
+                    if recovered(info, status):
+                        continue
                 normalized[key] = info
             return normalized
         except (OSError, ValueError, TypeError):
@@ -5238,7 +5244,7 @@ class MainWindow(QMainWindow):
     def _start_api_health_check(self) -> None:
         if self._api_health_future is not None and not self._api_health_future.done():
             return
-        self._api_health_future = self._api_health_executor.submit(check_collection_apis, 6.0)
+        self._api_health_future = self._api_health_executor.submit(check_collection_apis)
         QTimer.singleShot(100, self._finish_api_health_check)
 
     def _finish_api_health_check(self) -> None:
@@ -5253,6 +5259,8 @@ class MainWindow(QMainWindow):
             results = future.result()
         except Exception:
             results = {"bom": False, "aps": False, "production": False, "live": False}
+        self._api_health_results = results
+        self._refresh_header_status()
         for key, connected in results.items():
             controls = getattr(self, "collection_controls", {}).get(key)
             if not controls:

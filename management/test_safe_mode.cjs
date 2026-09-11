@@ -30,3 +30,7 @@ assert.equal(values.size,0);
 mode='안전모드';context.safeModeControl_(spreadsheet,'생산3공장 똑딱이');assert.equal(calls,6);
 mode='자동모르';assert.throws(()=>context.safeModeControl_(spreadsheet,'생산3공장 똑딱이'));
 console.log('PASS: global program row, latest filename, shared immutable selection, auto reset, invalid mode');
+const scm = {getSheetByName:()=>({getDataRange:()=>({getDisplayValues:()=>[['A','B','C'],['SCM 컨트롤타워','허가','안전모드']]})})};
+const beforeCalls = calls;
+assert.throws(()=>context.safeModeControl_(scm,'SCM 컨트롤타워'),/자료 저장소/);
+assert.equal(calls,beforeCalls);

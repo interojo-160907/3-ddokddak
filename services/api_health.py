@@ -28,7 +28,7 @@ def _probe(path: str, params: dict[str, object], timeout: float) -> bool:
         return False
 
 
-def check_collection_apis(timeout: float = 6.0) -> dict[str, bool]:
+def check_collection_apis(timeout: float = 30.0) -> dict[str, bool]:
     today = date.today().isoformat()
     probes = {
         "bom": ("/api/product-names", {"limit": 1}),

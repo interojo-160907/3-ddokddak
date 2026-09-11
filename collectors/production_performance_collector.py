@@ -114,7 +114,7 @@ def _simple_day_chunks(start: date, end: date) -> list[tuple[date, date]]:
     return chunks
 
 
-def _fetch(start: date, end: date, api_key: str, timeout: int) -> dict[str, Any]:
+def _fetch_once(start: date, end: date, api_key: str, timeout: int) -> dict[str, Any]:
     headers = {"Accept": "application/json"}
     if api_key:
         headers["X-API-Key"] = api_key
@@ -132,9 +132,24 @@ def _fetch(start: date, end: date, api_key: str, timeout: int) -> dict[str, Any]
     response.raise_for_status()
     response.encoding = "utf-8"
     payload = response.json()
-    if payload.get("truncated"):
+    if payload.get("truncated") or (
+        payload.get("total_count") is not None
+        and int(payload["total_count"]) != len(payload.get("rows") or [])
+    ):
         raise RuntimeError(f"생산실적 {start}~{end} 응답이 일부만 반환되었습니다.")
     return payload
+
+
+def _fetch(start: date, end: date, api_key: str, timeout: int) -> dict[str, Any]:
+    # 당일 입력 중 COUNT와 상세 조회 시점이 달라지는 경우를 제한적으로 재시도한다.
+    # 끝까지 불완전한 응답은 기존 DB를 교체하지 않고 호출자에게 실패로 전달한다.
+    for attempt in range(3):
+        try:
+            return _fetch_once(start, end, api_key, timeout)
+        except RuntimeError as exc:
+            if "일부만 반환" not in str(exc) or attempt == 2 or start != end:
+                raise
+            time.sleep(1)
 
 
 def _fetch_complete_range(start: date, end: date, api_key: str, timeout: int) -> list[dict[str, Any]]:
