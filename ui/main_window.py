@@ -1230,8 +1230,10 @@ class MainWindow(QMainWindow):
 
     def __init__(self, management_notices: list[dict[str, Any]] | tuple[dict[str, Any], ...] = ()) -> None:
         super().__init__()
-        self.setWindowTitle(f"똑딱이 - 생산3팀 전용 v{APP_VERSION}")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self._mode_error = ""
+        self._mode_failures = 0
+        self._mode_transient = False
         self._mode_future = None
         self._mode_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ddokddak-mode")
         self.setMinimumSize(1040, 680)
@@ -1362,6 +1364,7 @@ class MainWindow(QMainWindow):
         try:
             mode, prepared = future.result()
             self._mode_error = ""
+            self._mode_failures = 0
             if prepared:
                 safe_mode.activate(prepared)
             elif mode == "자동모드" and previous:
@@ -1381,6 +1384,8 @@ class MainWindow(QMainWindow):
             if mode == "자동모드":
                 safe_mode.cleanup()
         except Exception as exc:
+            self._mode_failures += 1
+            self._mode_transient = safe_mode.transient_control_error(exc)
             self._mode_error = str(exc)
         self._refresh_header_status()
 
@@ -2078,12 +2083,12 @@ class MainWindow(QMainWindow):
             self.header_meta.setText(f"안전모드 · {info['label']}")
         self.header_meta.setStyleSheet("QLabel { color:#9A5700; background:#FFF5DF; border:1px solid #E8BF6A; border-radius:8px; padding:7px 12px; }" if info else "")
         if self._mode_error:
-            self.header_meta.setText(self.header_meta.text() + " · 모드 확인 필요")
+            self.header_meta.setText(self.header_meta.text() + (" · 모드 확인 지연" if self._mode_transient and self._mode_failures < 3 else " · 모드 확인 필요"))
         self.header_meta.setToolTip(self._mode_error or (info.get("name", "") if info else "전체설정 C열 자동모드"))
         api_collection_ready = collection_ready(
             self.dashboard_data, self._read_collection_errors(),
             getattr(self, "_api_health_results", {}),
-        ) and not self._mode_error
+        )
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText(
             "●  수집 전체 양호" if api_collection_ready else "●  수집 상태 확인 필요"

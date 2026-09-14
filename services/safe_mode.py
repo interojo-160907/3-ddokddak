@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
@@ -83,17 +84,40 @@ def _write(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def transient_control_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return exc.response.status_code in {408, 429, 500, 502, 503, 504}
+    return False
+
+
 def fetch_control() -> dict:
     gate = ProgramGate(APP_VERSION)
     if not gate.endpoint:
         raise RuntimeError("전체설정 관리 API가 등록되지 않았습니다.")
-    response = requests.post(gate.endpoint, json={**gate.identity(), "action": "mode"}, timeout=(3, 15))
-    response.raise_for_status()
-    body = response.json()
-    data = body.get("result", body)
-    if body.get("ok") is False or data.get("mode") not in {"자동모드", "안전모드"}:
-        raise RuntimeError(data.get("message") or "관리 API의 전체설정 모드 기능 업데이트가 필요합니다.")
-    return data
+    started = time.monotonic()
+    diagnostic = {"checked_at": datetime.now().astimezone().isoformat()}
+    try:
+        response = requests.post(gate.endpoint, json={**gate.identity(), "action": "mode"}, timeout=(5, 30))
+        response.raise_for_status()
+        body = response.json()
+        data = body.get("result", body)
+        if body.get("ok") is False or data.get("mode") not in {"자동모드", "안전모드"}:
+            raise RuntimeError(data.get("message") or "관리 API의 전체설정 모드 기능 업데이트가 필요합니다.")
+        diagnostic.update(status="success", mode=data["mode"])
+        return data
+    except Exception as exc:
+        # Do not persist URLs, PC identity, or response payloads.
+        diagnostic.update(status="error", error_type=type(exc).__name__)
+        raise
+    finally:
+        diagnostic["elapsed_seconds"] = round(time.monotonic() - started, 3)
+        try:
+            _write(DATA_CENTER_DIR / "settings" / "mode_check_status.json", diagnostic)
+        except OSError:
+            pass
+
 
 
 def prepare(asset: dict) -> dict:
