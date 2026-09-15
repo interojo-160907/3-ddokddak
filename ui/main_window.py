@@ -60,7 +60,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import APP_DISPLAY_NAME, APP_NAME, APP_VERSION, ASSET_DIR, DATA_CENTER_DIR, DEFAULT_FACTORY, LEAD_SHEET_PDF_BACKUP_DIR, ROOT_DIR
-from services.collection_health import recovered, collection_ready
+from services.collection_health import recovered, collection_ready, header_status
 
 
 def _collector_executable() -> str:
@@ -106,7 +106,7 @@ from services.dashboard_service import DashboardService
 from services.process_status_service import ProcessStatusService, business_sort_key, classification_sort_key
 from services.program_gate import DEFAULT_UPDATE_URL, ProgramGate
 from services.program_presence import PRESENCE_INTERVAL_MS, ProgramPresence
-from services.api_health import check_collection_apis
+from services.api_health import check_collection_api_details, record_health, connection_label
 from services import safe_mode
 from ui.bom_page import BomStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
@@ -2085,30 +2085,31 @@ class MainWindow(QMainWindow):
         if self._mode_error:
             self.header_meta.setText(self.header_meta.text() + (" · 모드 확인 지연" if self._mode_transient and self._mode_failures < 3 else " · 모드 확인 필요"))
         self.header_meta.setToolTip(self._mode_error or (info.get("name", "") if info else "전체설정 C열 자동모드"))
-        api_collection_ready = collection_ready(
+        status_text, status_tip, api_collection_ready = header_status(
             self.dashboard_data, self._read_collection_errors(),
-            getattr(self, "_api_health_results", {}),
+            getattr(self, "_api_health_details", {}),
         )
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
-        self.data_status.setText(
-            "●  수집 전체 양호" if api_collection_ready else "●  수집 상태 확인 필요"
-        )
+        self.data_status.setText("●  " + status_text)
+        self.data_status.setToolTip(status_tip)
         if api_collection_ready:
             self.data_status.setCursor(Qt.ArrowCursor)
-            self.data_status.setToolTip("BOM·APS·생산실적·WIP의 마지막 수집이 정상이며 확인된 접속 오류가 없습니다.")
             self.data_status.setStyleSheet(
                 "QPushButton { background:#ECFDF5; color:#087F5B; border:1px solid #9CE2C5; "
                 "border-radius:10px; padding:7px 14px; font-weight:700; }"
             )
         else:
             self.data_status.setCursor(Qt.PointingHandCursor)
-            self.data_status.setToolTip("클릭하여 설정 및 운영의 데이터 수집 상태를 확인합니다.")
             self.data_status.setStyleSheet(
                 "QPushButton { background:#FFF7ED; color:#B45309; border:1px solid #FDBA74; "
                 "border-radius:10px; padding:7px 14px; font-weight:800; }"
                 "QPushButton:hover { background:#FFEDD5; border-color:#F97316; }"
                 "QPushButton:pressed { background:#FED7AA; }"
             )
+        if status_text.startswith("수집 정상") and "확인 필요" not in status_text:
+            self.data_status.setStyleSheet(
+                "QPushButton { background:#EFF6FF; color:#2563EB; border:1px solid #BFDBFE; "
+                "border-radius:10px; padding:7px 14px; font-weight:700; }")
         self.data_status.style().unpolish(self.data_status)
         self.data_status.style().polish(self.data_status)
 
@@ -5249,7 +5250,7 @@ class MainWindow(QMainWindow):
     def _start_api_health_check(self) -> None:
         if self._api_health_future is not None and not self._api_health_future.done():
             return
-        self._api_health_future = self._api_health_executor.submit(check_collection_apis)
+        self._api_health_future = self._api_health_executor.submit(check_collection_api_details)
         QTimer.singleShot(100, self._finish_api_health_check)
 
     def _finish_api_health_check(self) -> None:
@@ -5262,8 +5263,13 @@ class MainWindow(QMainWindow):
         self._api_health_future = None
         try:
             results = future.result()
-        except Exception:
-            results = {"bom": False, "aps": False, "production": False, "live": False}
+        except Exception as exc:
+            results = {key: {"status": "error", "error_type": type(exc).__name__}
+                       for key in ("bom", "aps", "production", "live")}
+        self._api_health_details = record_health(
+            results, getattr(self, "_api_health_details", {}),
+            DATA_CENTER_DIR / "settings" / "api_health_status.json")
+        results = {key: value.get("status") == "success" for key, value in results.items()}
         self._api_health_results = results
         self._refresh_header_status()
         for key, connected in results.items():
@@ -5273,10 +5279,15 @@ class MainWindow(QMainWindow):
             label = controls.get("connection")
             if label is None:
                 continue
-            label.setText("● 원활" if connected else "● 확인 필요")
+            detail = self._api_health_details[key]
+            label.setText("● " + connection_label(detail))
+            label.setToolTip(f"확인 {detail.get('checked_at', '-')} · {detail.get('elapsed_seconds', '-')}초\n"
+                             f"{detail.get('endpoint', '')} · {detail.get('error_type') or detail.get('http_status', '')}\n"
+                             f"연속 실패 {detail['consecutive_failures']}회 · 마지막 정상 {detail.get('last_success_at') or '-'}")
             label.setStyleSheet(
                 "color: #059669; font-weight: 800;"
                 if connected
+                else "color: #2563EB; font-weight: 700;" if connection_label(detail) == "응답 대기"
                 else "color: #d97706; font-weight: 800;"
             )
 
