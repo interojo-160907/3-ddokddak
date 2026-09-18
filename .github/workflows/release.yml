@@ -74,18 +74,28 @@ jobs:
           & $iscc "installer\production3.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Verify direct upgrade from v2.6.4
+      - name: Verify direct upgrades from all published versions
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $priorDir = Join-Path $env:RUNNER_TEMP 'production3-v264'
-          gh release download v2.6.4 --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $priorDir
-          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch legacy installer for upgrade test.' }
+          $ErrorActionPreference = 'Stop'
           $installer = Get-ChildItem 'installer\output\ddokddak-production3-setup-*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           $version = '${{ github.ref_name }}'.TrimStart('v')
-          & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $releases = gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName,isDraft,isPrerelease | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate historical installers.' }
+          $priorVersions = @($releases | Where-Object {
+            -not $_.isDraft -and -not $_.isPrerelease -and $_.tagName -match '^v\d+\.\d+\.\d+$' -and
+            [version]$_.tagName.TrimStart('v') -ge [version]'2.6.4' -and
+            [version]$_.tagName.TrimStart('v') -lt [version]$version
+          } | Sort-Object { [version]$_.tagName.TrimStart('v') })
+          if ($priorVersions.Count -lt 8) { throw 'Incomplete historical release list.' }
+          foreach ($prior in $priorVersions) {
+            $priorDir = Join-Path $env:RUNNER_TEMP ('production3-prior-' + $prior.tagName)
+            gh release download $prior.tagName --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $priorDir
+            if ($LASTEXITCODE -ne 0) { throw "Cannot fetch legacy installer: $($prior.tagName)" }
+            & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version -PriorVersion $prior.tagName.TrimStart('v')
+          }
 
       - name: Prepare release assets
         shell: pwsh
