@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       target_version:
-        description: 'Published installer to test against every release from v2.6.4 through v2.7.7'
+        description: 'Published installer to test against every prior release from v2.6.4'
         required: true
-        default: 'v2.7.8'
+        default: 'v2.7.9'
   push:
     tags:
       - "v*"
@@ -147,7 +147,7 @@ jobs:
           $versions = @($releases | Where-Object {
             -not $_.isDraft -and -not $_.isPrerelease -and $_.tagName -match '^v\d+\.\d+\.\d+$' -and
             [version]$_.tagName.TrimStart('v') -ge [version]'2.6.4' -and
-            [version]$_.tagName.TrimStart('v') -le [version]'2.7.7'
+            [version]$_.tagName.TrimStart('v') -lt [version]$env:TARGET_VERSION.TrimStart('v')
           } | Sort-Object { [version]$_.tagName.TrimStart('v') })
           if ($versions.Count -lt 8) { throw 'Incomplete historical release list.' }
           $results = @()

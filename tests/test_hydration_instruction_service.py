@@ -51,16 +51,16 @@ class HydrationInstructionServiceTests(unittest.TestCase):
         }
         opened_urls: list[str] = []
 
-        def fake_urlopen(request, timeout):
-            self.assertEqual(timeout, 120)
-            opened_urls.append(request.full_url)
-            return _Response(json.dumps(payload).encode("utf-8"))
+        def fake_request(endpoint, params, timeout):
+            self.assertEqual(timeout, 30)
+            from urllib.parse import urlencode
+            opened_urls.append(endpoint + '?' + urlencode(params))
+            return payload
 
         with (
             tempfile.TemporaryDirectory() as folder,
             patch.object(module, "date", _FixedDate),
-            patch.object(module.urllib.request, "urlopen", side_effect=fake_urlopen),
-            patch.object(module, "credential_value", return_value="test-key"),
+            patch.object(module, "request_json", side_effect=fake_request),
         ):
             service = module.HydrationInstructionService(Path(folder))
             result = service.refresh()
@@ -88,12 +88,32 @@ class HydrationInstructionServiceTests(unittest.TestCase):
         ]
         for payload in cases:
             with self.subTest(payload=payload), tempfile.TemporaryDirectory() as folder, patch.object(
-                module.urllib.request,
-                "urlopen",
-                return_value=_Response(json.dumps(payload).encode("utf-8")),
+                module,
+                "request_json",
+                return_value=payload,
             ):
                 with self.assertRaises(ValueError):
                     module.HydrationInstructionService(Path(folder)).refresh()
+
+    def test_invalid_quantity_does_not_publish_partial_totals(self):
+        for quantity in ('NaN','Infinity',-1,'bad'):
+            with self.subTest(quantity=quantity), tempfile.TemporaryDirectory() as folder:
+                service=module.HydrationInstructionService(Path(folder))
+                service.current_path.write_text('{"quantities":{"P1":99}}','utf-8')
+                before=service.current_path.read_bytes()
+                payload={'rows':[{'gd_cd':'P1','job_qty':10},{'gd_cd':'P2','job_qty':quantity}],'total_count':2}
+                with patch.object(module,'request_json',return_value=payload), self.assertRaises(ValueError):
+                    service.refresh()
+                self.assertEqual(service.current_path.read_bytes(),before)
+
+    def test_zero_instructions_replace_previous_quantity(self):
+        with tempfile.TemporaryDirectory() as folder:
+            service=module.HydrationInstructionService(Path(folder))
+            service.current_path.write_text('{"quantities":{"P1":99}}','utf-8')
+            with patch.object(module,'request_json',return_value={'rows':[],'total_count':0}):
+                result=service.refresh()
+            self.assertEqual(result['total_qty'],0)
+            self.assertEqual(service.load()['quantities'],{})
 
 
 if __name__ == "__main__":

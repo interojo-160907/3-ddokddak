@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import os
-import urllib.parse
-import urllib.request
+import time
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from services.item_code_service import credential_value
+from services.erp_api_client import request_json
 
 
 DEFAULT_CONFIG = {
@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
 class HydrationInstructionService:
     def __init__(self, cache: Path):
         self.cache = Path(cache)
+        self.cache.mkdir(parents=True, exist_ok=True)
         self.config_path = self.cache / "hydration_api_config.json"
         self.current_path = self.cache / "hydration_instructions.json"
         if not self.config_path.exists():
@@ -55,27 +56,23 @@ class HydrationInstructionService:
     @staticmethod
     def _number(value):
         try:
-            return float(str(value).replace(",", ""))
+            number = float(str(value).replace(",", ""))
+            return number if math.isfinite(number) and number >= 0 else None
         except (TypeError, ValueError):
             return None
 
     def refresh(self) -> dict:
+        started = time.monotonic()
         cfg = self.config();endpoint = str(cfg.get("endpoint") or "").strip()
         if not endpoint:
             return {"status": "unconnected", "message": "ERP 하이드레이션 지시 API 경로 대기 중", "config": str(self.config_path)}
         if endpoint.startswith("/"):
-            endpoint = "https://plan.interojo.net" + endpoint
+            endpoint = os.getenv("DDOKDDAK_PROD3_API_BASE_URL", "https://plan.interojo.net").rstrip("/") + endpoint
         today = date.today();params = dict(cfg.get("params") or {})
         lookback_days=max(1,int(cfg.get("lookback_days") or 5))
         params.setdefault("date_from", (today - timedelta(days=lookback_days-1)).isoformat())
         params.setdefault("date_to", today.isoformat())
-        url = endpoint + ("&" if "?" in endpoint else "?") + urllib.parse.urlencode(params)
-        headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        api_key = (os.getenv("DDOKDDAK_PROD3_API_KEY", os.getenv("PLAN_API_KEY", "")).strip()
-                   or credential_value("DDOKDDAK_PROD3_API_KEY") or credential_value("PLAN_API_KEY"))
-        if api_key: headers["X-API-Key"] = api_key
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
-            payload = json.load(response)
+        payload = request_json(endpoint, params, timeout=30)
         rows_field=str(cfg.get("rows_field") or "rows")
         rows = payload.get(rows_field)
         if not isinstance(rows,list):
@@ -88,6 +85,8 @@ class HydrationInstructionService:
         quantity_field = str(cfg.get("quantity_field") or "instruction_qty")
         normalized=[];quantities=Counter();invalid=0;identities=set()
         for source in rows:
+            if not isinstance(source, dict):
+                invalid += 1;continue
             item=str(source.get(item_field) or "").strip().upper();qty=self._number(source.get(quantity_field))
             if not item.startswith("P") or qty is None:
                 invalid += 1;continue
@@ -113,7 +112,7 @@ class HydrationInstructionService:
             }.items():
                 row[target]=next((source.get(name) for name in aliases if source.get(name) not in (None,"")),"")
             normalized.append(row);quantities[item]+=qty
-        if rows and not normalized:
+        if invalid:
             raise ValueError(f"하이드레이션 지시 API 필드 확인 필요: {item_field}, {quantity_field}")
         captured=datetime.now().isoformat(timespec="seconds")
         snapshot={"status":"success","captured_at":captured,"endpoint":endpoint,"query_params":params,"source_total_count":payload.get("total_count",len(rows)),
@@ -123,7 +122,8 @@ class HydrationInstructionService:
         folder=self.cache/"snapshots"/datetime.now().strftime("%Y%m%d_%H%M%S_%f");folder.mkdir(parents=True,exist_ok=True)
         archive=folder/"hydration_instructions.json.gz"
         with gzip.open(archive,"wt",encoding="utf-8") as stream:json.dump(snapshot,stream,ensure_ascii=False)
-        return {"status":"success","completed_at":captured,"rows":len(normalized),"products":len(quantities),"total_qty":sum(quantities.values()),"snapshot":str(archive)}
+        return {"status":"success","completed_at":captured,"rows":len(normalized),"products":len(quantities),"total_qty":sum(quantities.values()),"snapshot":str(archive),
+                "elapsed_seconds":round(time.monotonic()-started,2),"query_params":params}
 
     def load(self) -> dict:
         if not self.current_path.exists():

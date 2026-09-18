@@ -1323,7 +1323,7 @@ class MainWindow(QMainWindow):
         self.notice_check_timer.start()
         QTimer.singleShot(18_000, self._start_notice_check)
         self.api_health_timer = QTimer(self)
-        self.api_health_timer.setInterval(60_000)
+        self.api_health_timer.setInterval(300_000)
         self.api_health_timer.timeout.connect(self._start_api_health_check)
         self.api_health_timer.start()
         QTimer.singleShot(800, self._start_api_health_check)

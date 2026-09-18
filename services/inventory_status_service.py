@@ -2,7 +2,6 @@
 from __future__ import annotations
 from contextlib import closing
 import collections
-import concurrent.futures
 import hashlib
 import json
 import gzip
@@ -12,15 +11,14 @@ import shutil
 import sqlite3
 import threading
 import time
-import urllib.parse
-import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 from config import DATA_CENTER_DIR, DATA_DIR
 from services.process_status_service import _channel, classification_sort_key
 from services.live_production_need_service import DB_PATH as LIVE_DB_PATH
 from services.hydration_instruction_service import HydrationInstructionService
-from services.item_code_service import credential_value
+from services.erp_api_client import request_json
+from services.collection_parallel import bounded_map
 
 HEADERS = ['신규분류요약','품명','파워 / CP / AXIS / ADD','사출코드','분리코드','제품코드',
            '사출창고','분리창고','수화 지시량','검사접착',
@@ -125,26 +123,13 @@ class InventoryStatusService:
         while len(self._memory_results)>8:self._memory_results.popitem(last=False)
 
     def _request(self, name, endpoint, params):
-        base=os.getenv('DDOKDDAK_PROD3_API_BASE_URL','https://plan.interojo.net').rstrip('/')
-        url=base+endpoint+'?'+urllib.parse.urlencode(params)
-        headers={'User-Agent':'Mozilla/5.0','Accept':'application/json'}
-        key=(os.getenv('DDOKDDAK_PROD3_API_KEY',os.getenv('PLAN_API_KEY','')).strip()
-             or credential_value('DDOKDDAK_PROD3_API_KEY') or credential_value('PLAN_API_KEY'))
-        if key:headers['X-API-Key']=key
-        request=urllib.request.Request(url,headers=headers)
-        last_error=None
-        for attempt in range(2):
-            try:
-                with urllib.request.urlopen(request,timeout=45) as response:data=json.load(response)
-                if not isinstance(data,dict) or data.get('truncated') or not isinstance(data.get('rows'),list):raise ValueError(name+' 불완전 응답')
-                if data.get('total_count') is not None and len(data['rows'])!=int(data['total_count']):raise ValueError(name+' 행 수 불일치')
-                break
-            except (OSError,ValueError,TypeError,json.JSONDecodeError) as exc:
-                last_error=exc
-                if attempt == 0:time.sleep(.6)
-        else:
-            raise last_error
-        return self.save_response(name,data)
+        data = request_json(endpoint, params, timeout=30)
+        return self.save_response(name, data)
+
+    def _warm_specs(self, missing):
+        # Save successful items individually; resume only missing items later.
+        bounded_map(lambda base: self._request('item_'+base, '/api/item-list-bulk',
+                                              {'gd_cd':base, 'limit':0}), missing)
 
     def save_response(self,name,data):
         if not isinstance(data,dict) or data.get('truncated') or not isinstance(data.get('rows'),list):
@@ -240,8 +225,7 @@ class InventoryStatusService:
         missing=[b for b in codes if not (self.cache/('item_'+b+'.json')).exists()]
         if missing and not allow_network:
             raise ValueError(f'제품 규격 {len(missing)}종 수집 대기')
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            for job in [pool.submit(self._request,'item_'+b,'/api/item-list-bulk',{'gd_cd':b,'limit':0}) for b in missing]:job.result()
+        self._warm_specs(missing)
         items={};byopt={};lookup={}
         for b in codes:
             data=json.loads((self.cache/('item_'+b+'.json')).read_text('utf-8'))

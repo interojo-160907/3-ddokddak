@@ -21,6 +21,9 @@ except ImportError:
     from services.data_location import resolve_data_root
 
 
+from services.api_credentials import resolve_api_key
+
+
 RESULT_PATH = resolve_data_root() / "settings" / "full_refresh_status.json"
 
 
@@ -35,7 +38,7 @@ def _write_result(value: dict) -> None:
 
 
 def main() -> int:
-    api_key = os.getenv("PLAN_API_KEY", "")
+    api_key = resolve_api_key()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     report = {
         "started_at": started_at,

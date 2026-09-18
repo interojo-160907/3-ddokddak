@@ -53,6 +53,10 @@ def run() -> dict:
         raise AssertionError('Unexpected external request: '+endpoint)
 
     class Reply:
+        status_code = 200
+        headers = {}
+        def __enter__(self):return self
+        def __exit__(self,*args):self.close()
         encoding = 'utf-8'
         def __init__(self,payload):self.payload=payload
         def raise_for_status(self):pass
@@ -92,9 +96,8 @@ def run() -> dict:
         ]:
             for key,value in attributes.items():stack.enter_context(patch.object(module,key,value))
         stack.enter_context(patch.dict('os.environ',{'DDOKDDAK_INVENTORY_STATUS_DATA_DIR':str(cache)}))
-        stack.enter_context(patch.object(live.requests,'get',side_effect=get))
-        stack.enter_context(patch.object(inventory.urllib.request,'urlopen',side_effect=urlopen))
-        for module in (inventory,hydration,batch):stack.enter_context(patch.object(module,'credential_value',return_value=''))
+        stack.enter_context(patch('services.erp_api_client.requests.Session.get',side_effect=get))
+        stack.enter_context(patch('services.api_credentials.resolve_api_key',return_value=''))
         stack.enter_context(patch.object(live.time,'sleep',return_value=None))
 
         failed.add('사출창고')

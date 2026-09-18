@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 
 from services.inventory_status_service import InventoryStatusService, WAREHOUSES
 from services.hydration_instruction_service import HydrationInstructionService
-from services.item_code_service import credential_value
+from services.api_credentials import resolve_api_key
 from services.live_production_need_service import DB_PATH, STATUS_PATH
 from collectors import live_production_need_collector as live_collector
 
@@ -89,8 +89,7 @@ def refresh() -> dict:
             report['hydration'] = outcome
             save_report()
 
-    key = (os.getenv('DDOKDDAK_PROD3_API_KEY', os.getenv('PLAN_API_KEY', '')).strip()
-           or credential_value('DDOKDDAK_PROD3_API_KEY') or credential_value('PLAN_API_KEY'))
+    key = resolve_api_key()
     with ThreadPoolExecutor(max_workers=1) as pool:
         hydration_job = pool.submit(hydration_received)
         try:

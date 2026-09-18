@@ -10,33 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from config import DATA_CENTER_DIR
 
 
-def credential_value(name: str) -> str:
-    """Resolve the same API credential without importing Control Tower settings."""
-    value = os.getenv(name, "").strip()
-    if value:
-        return value
-    try:
-        import keyring
-    except ImportError:
-        return ""
-    for service, user in (
-        ("APS_YIELD_DASHBOARD", name),
-        ("DDOKDDAK", name),
-    ):
-        try:
-            value = (keyring.get_password(service, user) or "").strip()
-        except Exception:
-            value = ""
-        if value:
-            return value
-    return ""
+from services.api_credentials import credential_value
+from services.erp_api_client import ApiRequestError, request_json
 
 
 BASE_URL = "https://plan.interojo.net"
@@ -173,10 +152,19 @@ class ItemCodeService:
 
         errors: dict[str, str] = {}
         if to_fetch:
-            pool = ThreadPoolExecutor(max_workers=min(4, len(to_fetch)))
+            pool = ThreadPoolExecutor(max_workers=min(2, len(to_fetch)))
+            api_unavailable = threading.Event()
+            def fetch(base):
+                if api_unavailable.is_set():
+                    raise RuntimeError('품목 API 응답 대기 · 다음 갱신에서 재시도')
+                try:
+                    return self._fetch_one(base)
+                except ApiRequestError:
+                    api_unavailable.set()
+                    raise
             cancelled = False
             try:
-                futures = {pool.submit(self._fetch_one, base): base for base in to_fetch}
+                futures = {pool.submit(fetch, base): base for base in to_fetch}
                 pending = set(futures)
                 while pending:
                     if cancel_event is not None and cancel_event.is_set():
@@ -220,40 +208,11 @@ class ItemCodeService:
                 }
         return {"rows_by_code": data, "sources": sources, "errors": errors, "cancelled": False}
 
-    @staticmethod
-    def _session() -> requests.Session:
-        retry = Retry(
-            total=2,
-            connect=2,
-            read=2,
-            status=2,
-            backoff_factor=0.7,
-            status_forcelist=(429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
-            raise_on_status=False,
-        )
-        session = requests.Session()
-        session.mount("https://", HTTPAdapter(max_retries=retry))
-        return session
-
     def _fetch_one(self, base: str) -> tuple[list[dict[str, Any]], str]:
-        headers = {"Accept": "application/json"}
-        api_key = credential_value("PLAN_API_KEY")
-        if api_key:
-            headers["X-API-Key"] = api_key
-        with self._session() as session:
-            response = session.get(
-                f"{BASE_URL}{ENDPOINT}",
-                params={
-                    "gd_cd": base,
-                    "limit": 0,
-                    "prompt_context": "SCM Control Tower 품목코드 구성 조회",
-                },
-                headers=headers,
-                timeout=(15, 120),
-            )
-            response.raise_for_status()
-            payload = response.json()
+        payload = request_json(ENDPOINT, {
+            "gd_cd": base, "limit": 0,
+            "prompt_context": "똑딱이 생산3팀 품목코드 구성 조회",
+        }, timeout=30)
         if payload.get("truncated"):
             raise RuntimeError(f"{base} 품목코드 API 응답이 잘렸습니다.")
         raw_rows = [

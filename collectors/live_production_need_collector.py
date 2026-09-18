@@ -14,12 +14,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
-import requests
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 
+from services.erp_api_client import request_json
 from services.data_location import resolve_data_root
 
 
@@ -126,33 +126,10 @@ def _request(
     attempts: int = 3,
     allow_truncated: bool = False,
 ) -> dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        try:
-            response = requests.get(
-                f"{BASE_URL}{endpoint}",
-                params=params,
-                headers=headers,
-                timeout=timeout,
-            )
-            try:
-                response.raise_for_status()
-                response.encoding = "utf-8"
-                payload = response.json()
-            finally:
-                response.close()
-            if not isinstance(payload,dict):raise ValueError(endpoint+' invalid JSON object')
-            if payload.get("truncated") and not allow_truncated:
-                raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
-            return payload
-        except (requests.RequestException, ValueError, RuntimeError) as exc:
-            last_error = exc
-            if attempt + 1 < attempts:
-                time.sleep(1.5 * (attempt + 1))
-    raise RuntimeError(f"{endpoint} 수집 실패: {last_error}")
+    payload = request_json(endpoint, params, api_key=api_key, timeout=min(timeout, 45), attempts=attempts)
+    if payload.get("truncated") and not allow_truncated:
+        raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
+    return payload
 
 
 def _replace_database(source: Path, destination: Path, attempts: int = 60) -> None:
@@ -1083,7 +1060,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="APS 회차 기준 실시간 생산 필요수량 계산")
     parser.add_argument(
         "--api-key",
-        default=os.getenv("DDOKDDAK_PROD3_API_KEY", os.getenv("PLAN_API_KEY", "")),
+        default="",
     )
     parser.add_argument("--timeout", type=int, default=240)
     args = parser.parse_args()
