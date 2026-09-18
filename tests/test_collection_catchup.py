@@ -66,6 +66,17 @@ class SchedulerCatchupTests(unittest.TestCase):
         window._run_scheduled_collections = Mock()
         return window
 
+    @staticmethod
+    def _completed_bootstrap(path: Path) -> dict:
+        if path.name == "version_collection_bootstrap.json":
+            from config import APP_VERSION
+
+            return {"completed_version": APP_VERSION}
+        return {
+            "status": "success",
+            "daily_full_date": date.today().isoformat(),
+        }
+
     def test_startup_after_days_runs_ordered_full_refresh(self) -> None:
         window = self._window()
         stale = datetime.now() - timedelta(days=3)
@@ -74,7 +85,13 @@ class SchedulerCatchupTests(unittest.TestCase):
             "daily_full_date": date.today().isoformat(),
         }
         window._status_refreshed_at = Mock(return_value=stale)
-        window._read_refresh_status = Mock(return_value=status)
+        window._read_refresh_status = Mock(
+            side_effect=lambda path: (
+                self._completed_bootstrap(path)
+                if path.name == "version_collection_bootstrap.json"
+                else status
+            )
+        )
         MainWindow._run_scheduled_collections(window)
 
         window._start_data_collection.assert_called_once_with("all", scheduled=True)
@@ -105,7 +122,9 @@ class SchedulerCatchupTests(unittest.TestCase):
             "live_minutes": 0,
         }
         window._read_refresh_status = Mock(
-            return_value={
+            side_effect=lambda path: self._completed_bootstrap(path)
+            if path.name == "version_collection_bootstrap.json"
+            else {
                 "status": "waiting_wip",
                 "refreshed_at": datetime.now().isoformat(timespec="seconds"),
             }
@@ -125,7 +144,9 @@ class SchedulerCatchupTests(unittest.TestCase):
             "live_minutes": 60,
         }
         window._read_refresh_status = Mock(
-            return_value={
+            side_effect=lambda path: self._completed_bootstrap(path)
+            if path.name == "version_collection_bootstrap.json"
+            else {
                 "status": "waiting_wip",
                 "refreshed_at": (
                     datetime.now() - timedelta(minutes=10)
@@ -140,6 +161,66 @@ class SchedulerCatchupTests(unittest.TestCase):
 
         window._start_data_collection.assert_called_once_with("live", scheduled=True)
         window._start_aps_monitor_check.assert_not_called()
+
+    def test_update_first_run_collects_live_when_inventory_or_hydration_is_missing(self) -> None:
+        window = self._window()
+        now = datetime.now()
+
+        def read_status(path: Path) -> dict:
+            if path.name == "version_collection_bootstrap.json":
+                return self._completed_bootstrap(path)
+            if path.name in {"hydration_instructions.json", "refresh_status.json"} and "inventory-status" in str(path):
+                return {}
+            return {
+                "status": "success",
+                "refreshed_at": now.isoformat(timespec="seconds"),
+                "daily_full_date": date.today().isoformat(),
+            }
+
+        window._read_refresh_status = Mock(side_effect=read_status)
+        window._status_refreshed_at = Mock(return_value=now)
+
+        MainWindow._run_scheduled_collections(window)
+
+        window._start_data_collection.assert_called_once_with("live", scheduled=True)
+        window._start_aps_monitor_check.assert_not_called()
+
+    def test_failed_first_inventory_cycle_retries_even_when_regular_schedule_is_off(self) -> None:
+        window = self._window()
+        window.collection_schedule = {
+            "bom_minutes": 0,
+            "aps_minutes": 0,
+            "production_minutes": 0,
+            "live_minutes": 0,
+        }
+        now = datetime.now()
+
+        def read_status(path: Path) -> dict:
+            if path.name == "version_collection_bootstrap.json":
+                return self._completed_bootstrap(path)
+            if path.name == "hydration_instructions.json":
+                return {"status": "success"}
+            if path.name == "refresh_status.json" and "inventory-status" in str(path):
+                return {"status": "partial"}
+            return {"status": "success", "refreshed_at": now.isoformat(timespec="seconds")}
+
+        window._read_refresh_status = Mock(side_effect=read_status)
+        window._status_refreshed_at = Mock(return_value=now)
+
+        MainWindow._run_scheduled_collections(window)
+
+        window._start_data_collection.assert_called_once_with("live", scheduled=True)
+
+    def test_new_version_forces_one_full_collection_before_regular_schedule(self) -> None:
+        window = self._window()
+        now = datetime.now()
+        window._read_refresh_status = Mock(return_value={})
+        window._status_refreshed_at = Mock(return_value=now)
+
+        MainWindow._run_scheduled_collections(window)
+
+        window._start_data_collection.assert_called_once_with("all", scheduled=True)
+        self.assertIn("version_bootstrap", window._collection_last_attempt)
 
     def test_live_collection_busy_state_reaches_main_and_internal_tabs(self) -> None:
         live_main = Mock()

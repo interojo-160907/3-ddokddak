@@ -1550,7 +1550,7 @@ class MainWindow(QMainWindow):
             self.data_status.setToolTip("APS 자동 확인 결과를 읽지 못했습니다.")
             return
         self.data_status.setToolTip(
-            "APS 원천 갱신을 1분마다 확인합니다. 변경 시 S관 데이터를 자동 수집합니다."
+            "APS 원천 갱신을 1분마다 확인합니다. 변경 시 전체 원천과 통합 계산을 자동 갱신합니다."
         )
         if not result.get("changed"):
             return
@@ -1559,7 +1559,7 @@ class MainWindow(QMainWindow):
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views({"aps"})
         self.show_page(self._active_nav_key)
-        QTimer.singleShot(250, lambda: self._start_data_collection("live", scheduled=True))
+        QTimer.singleShot(250, lambda: self._start_data_collection("all", scheduled=True))
 
     def _build_shell(self) -> None:
         central = QWidget()
@@ -2128,6 +2128,20 @@ class MainWindow(QMainWindow):
             self.dashboard_data, self._read_collection_errors(),
             getattr(self, "_api_health_details", {}),
         )
+        hydration_snapshot = MainWindow._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
+        )
+        inventory_cycle = MainWindow._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
+        )
+        inventory_bootstrap_pending = (
+            hydration_snapshot.get("status") != "success"
+            or inventory_cycle.get("status") != "success"
+        )
+        if api_collection_ready and inventory_bootstrap_pending:
+            status_text = "수집 준비 중 · 재고·수화 최초 갱신 대기"
+            status_tip = "업데이트 후 최초 통합 갱신을 자동으로 시작합니다. 완료 전에는 마지막 정상 데이터를 유지합니다."
+            api_collection_ready = False
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText("●  " + status_text)
         self.data_status.setToolTip(status_tip)
@@ -5379,11 +5393,29 @@ class MainWindow(QMainWindow):
         if hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
             return
         now = datetime.now()
+        bootstrap_path = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
+        bootstrap = self._read_refresh_status(bootstrap_path)
+        if str(bootstrap.get("completed_version") or "") != APP_VERSION:
+            attempted = self._collection_last_attempt.get("version_bootstrap")
+            if attempted is None or (now - attempted) >= timedelta(minutes=5):
+                self._collection_last_attempt["version_bootstrap"] = now
+                self._start_data_collection("all", scheduled=True)
+            return
         definitions = (
             ("bom", DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json"),
             ("aps", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json"),
             ("production", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
             ("live", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json"),
+        )
+        hydration_snapshot = self._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
+        )
+        inventory_cycle = self._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
+        )
+        inventory_bootstrap_due = (
+            hydration_snapshot.get("status") != "success"
+            or inventory_cycle.get("status") != "success"
         )
         due_sources: list[str] = []
         waiting_wip_due = False
@@ -5393,7 +5425,9 @@ class MainWindow(QMainWindow):
             waiting_wip = source == "live" and status_value == "waiting_wip"
             minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
             # APS 변경으로 시작된 WIP 감시는 정기 수집 설정과 별개로 완료까지 이어 간다.
-            if minutes <= 0 and not waiting_wip:
+            if minutes <= 0 and not waiting_wip and not (
+                source == "live" and inventory_bootstrap_due
+            ):
                 continue
             refreshed = self._status_refreshed_at(status_path)
             attempted = self._collection_last_attempt.get(source)
@@ -5409,6 +5443,7 @@ class MainWindow(QMainWindow):
             due = (
                 daily_full_due
                 or retained_retry_due
+                or (source == "live" and inventory_bootstrap_due)
                 or refreshed is None
                 or (now - refreshed) >= timedelta(minutes=minutes)
             )
@@ -5416,7 +5451,7 @@ class MainWindow(QMainWindow):
                 1
                 if source == "aps" or waiting_wip
                 else 5
-                if retained_retry_due
+                if retained_retry_due or (source == "live" and inventory_bootstrap_due)
                 else max(5, minutes)
             )
             retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
@@ -5799,6 +5834,41 @@ class MainWindow(QMainWindow):
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
+        if source == "all":
+            full = self._read_refresh_status(
+                DATA_CENTER_DIR / "settings" / "full_refresh_status.json"
+            )
+            inventory = self._read_refresh_status(
+                INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
+            )
+            hydration = self._read_refresh_status(
+                INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
+            )
+            full_results = full.get("results") or {}
+            required = ("bom", "aps", "production", "live")
+            bootstrap_ok = (
+                bool(full.get("completed_at"))
+                and all((full_results.get(key) or {}).get("status") == "success" for key in required)
+                and inventory.get("status") == "success"
+                and hydration.get("status") == "success"
+            )
+            if bootstrap_ok:
+                target = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix(".tmp")
+                temporary.write_text(
+                    json.dumps(
+                        {
+                            "completed_version": APP_VERSION,
+                            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "cycle_id": inventory.get("cycle_id", ""),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(target)
         if source == 'live' and hasattr(self, 'inventory_page'):
             state = self.inventory_page.inventory_service.cache / 'refresh_status.json'
             if state.exists():
@@ -5811,7 +5881,7 @@ class MainWindow(QMainWindow):
                 self.lot_work_order_page.calculation_status.setText(label)
                 self.settings_data_status.setText(label)
         if source == "aps":
-            QTimer.singleShot(250, lambda: self._start_data_collection("live", scheduled=True))
+            QTimer.singleShot(250, lambda: self._start_data_collection("all", scheduled=True))
         QTimer.singleShot(1_000, self._run_scheduled_collections)
 
     def _data_collection_process_error(self, source: str, process_error) -> None:
