@@ -11,13 +11,13 @@ try:
     from collectors.bom_snapshot_collector import refresh as refresh_bom
     from collectors.aps_update_monitor import check_and_refresh as refresh_aps
     from collectors.production_performance_collector import refresh as refresh_production
-    from collectors.inventory_live_refresh import main as refresh_live
+    from collectors.inventory_live_refresh import refresh as refresh_live
     from services.data_location import resolve_data_root
 except ImportError:
     from bom_snapshot_collector import refresh as refresh_bom
     from aps_update_monitor import check_and_refresh as refresh_aps
     from production_performance_collector import refresh as refresh_production
-    from inventory_live_refresh import main as refresh_live
+    from inventory_live_refresh import refresh as refresh_live
     from services.data_location import resolve_data_root
 
 
@@ -56,7 +56,8 @@ def main() -> int:
         for job in as_completed(jobs):
             key = jobs[job]
             try:
-                report["results"][key] = {"status": "success", "result": job.result()}
+                report["results"][key] = {"status": "success", "result": job.result(),
+                                           "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
             except Exception as exc:
                 failed = True
                 report["results"][key] = {
@@ -69,7 +70,9 @@ def main() -> int:
     # WIP/performance, warehouses and hydration use the latest base snapshots.
     key = "live"
     try:
-        report["results"][key] = {"status": "success", "result": refresh_live()}
+        live_result = refresh_live()
+        report["results"][key] = {"status": live_result.get('status','error'), "result": live_result,
+                                   "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
     except Exception as exc:
         failed = True
         report["results"][key] = {
@@ -81,7 +84,7 @@ def main() -> int:
     report["completed_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     _write_result(report)
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
-    return 1 if failed else 0
+    return 1 if failed else 0 if report['results']['live']['status']=='success' else 2
 
 
 if __name__ == "__main__":

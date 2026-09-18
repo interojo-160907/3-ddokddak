@@ -67,6 +67,19 @@ jobs:
           & $iscc "installer\production3.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Verify direct upgrade from v2.6.4
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $priorDir = Join-Path $env:RUNNER_TEMP 'production3-v264'
+          gh release download v2.6.4 --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $priorDir
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch legacy installer for upgrade test.' }
+          $installer = Get-ChildItem 'installer\output\ddokddak-production3-setup-*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Prepare release assets
         shell: pwsh
         run: |

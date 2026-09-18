@@ -38,6 +38,9 @@ def run(report_path: str) -> int:
         assert len(rows) == 1
         assert [rows[0][k] for k in ['사출','분리','하이드레이션','접착','누수규격']] == [1444,1444,1067,1065,1008]
     widget.close()
+    from services.inventory_simulation import run as simulate_inventory
+    inventory_simulation = simulate_inventory()
     Path(report_path).write_text(json.dumps({'ok':True,'numpy':numpy.__version__,
+        'inventory_simulation':inventory_simulation,
         'checks':['GUI imports','Qt rendering','Excel numeric roundtrip','APS snapshot','R/Q/P matching']}),encoding='utf-8')
     return 0

@@ -35,6 +35,14 @@ class CollectionDirectoryTests(unittest.TestCase):
 
 
 class VersionBootstrapTests(unittest.TestCase):
+    def test_live_partial_is_a_completed_base_pass(self):
+        report={'completed_at':'2026-09-19T07:00:00+09:00','results':{
+            'bom':{'status':'success'},'aps':{'status':'success'},
+            'production':{'status':'success'},'live':{'status':'partial'}}}
+        self.assertTrue(_version_bootstrap_ready(report))
+        report['results']['live']['status']='running'
+        self.assertFalse(_version_bootstrap_ready(report))
+
     def test_partial_inventory_does_not_repeat_every_base_collector(self) -> None:
         report = {
             "completed_at": datetime.now().isoformat(timespec="seconds"),
@@ -75,6 +83,24 @@ class ProductionCatchupTests(unittest.TestCase):
 
 
 class SchedulerCatchupTests(unittest.TestCase):
+    def test_user_cancellation_defers_automatic_restart(self):
+        window=self._window()
+        window._collection_resume_at=datetime.now()+timedelta(minutes=5)
+        MainWindow._run_scheduled_collections(window)
+        window._start_data_collection.assert_not_called()
+
+    def test_warehouse_recovery_has_priority_over_aps_poll(self):
+        window=self._window()
+        def read_status(path):
+            if path.name=='version_collection_bootstrap.json':return self._completed_bootstrap(path)
+            if 'inventory-status' in str(path) and path.name=='refresh_status.json':return {'status':'partial'}
+            return {'status':'success','daily_full_date':date.today().isoformat()}
+        window._read_refresh_status=Mock(side_effect=read_status)
+        window._status_refreshed_at=Mock(return_value=datetime.now()-timedelta(minutes=10))
+        MainWindow._run_scheduled_collections(window)
+        window._start_data_collection.assert_called_once_with('live',scheduled=True)
+        window._start_aps_monitor_check.assert_not_called()
+
     @staticmethod
     def _window() -> SimpleNamespace:
         window = SimpleNamespace()

@@ -824,7 +824,8 @@ class LotWorkOrderPage(ProcessOverviewPage):
     def set_refreshing(self, refreshing: bool) -> None:
         self._refreshing = refreshing
         self.lot_refresh_button.setEnabled(not refreshing)
-        self.lot_refresh_button.setText("계산 중…" if refreshing else "지금 갱신")
+        self.lot_refresh_button.setText("수집 중…" if refreshing else "지금 갱신")
+        if not refreshing:self.refresh_calculation_status()
         if refreshing:
             self.calculation_status.setText("WIP·재고·완료실적·수화 지시 수집 중")
             self.calculation_status.setProperty("status", "warning")
@@ -857,6 +858,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
         self.refresh_calculation_status()
 
     def refresh_calculation_status(self) -> None:
+        if getattr(self,'_refreshing',False):return
         """LOT 배정이 사용하는 최신 부족수량/WIP 산출 기준을 표시한다."""
         status = self.source_status_service.status()
         calculated = _display_time(status.get("refreshed_at"))

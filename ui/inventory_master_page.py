@@ -146,8 +146,14 @@ class InventoryStatusPage(LiveProductionNeedPage):
 
     def _show_cycle_status(self):
         super()._show_cycle_status()
-        self.calculation_status.hide()
-        self.live_refresh_button.hide()
+        if not getattr(self,'inventory_ready',False):
+            self.calculation_status.hide();self.live_refresh_button.hide();return
+        if getattr(self,'_refreshing',False):return
+        try:report=json.loads((self.inventory_service.cache/'refresh_status.json').read_text('utf-8'))
+        except (OSError,ValueError):report={}
+        if report.get('status') != 'success':
+            self.calculation_status.setText('일부 수집 대기 · 기존 결과 유지' if self.result else '최초 재고 수집 대기')
+            self.calculation_status.setToolTip('수집 완료 후 자동으로 표시됩니다. '+str(report.get('result',{}).get('message','')))
 
     def _update_kpis(self,rows):
         super()._update_kpis(rows)
@@ -197,6 +203,7 @@ class InventoryStatusPage(LiveProductionNeedPage):
         self._start(request)
 
     def _start(self,request):
+        self._active_request=request
         self.inventory_status.setText('부족제품 및 전체 규격 조회 중…');self.export_button.setEnabled(False)
         self.future=self.executor.submit(self.inventory_service.build,request);self.poll.start()
 
@@ -209,15 +216,22 @@ class InventoryStatusPage(LiveProductionNeedPage):
             except Exception:pass
             self._start(request);return
         try:result=future.result()
-        except Exception as exc:self.inventory_status.setText('조회 실패: '+str(exc));self.inventory_status.show();self.result=None;self.model.load([]);return
+        except Exception as exc:
+            same=self.result and self.inventory_service._filter_key(self.result.get('filters'))==self.inventory_service._filter_key(self._active_request)
+            self.inventory_status.setText(('기존 결과 유지 · ' if same else '조회 대기 · ')+str(exc));self.inventory_status.show()
+            if not same:self.result=None;self.model.load([])
+            self.export_button.setEnabled(bool(same));self._show_cycle_status();return
         self.inventory_status.hide()
         self.model.hydration_meta=result.get('hydration',{})
         self.result=result;prior=self.tabs.tabText(self.tabs.currentIndex());self.tabs.blockSignals(True)
+        self._show_cycle_status()
         while self.tabs.count():self.tabs.removeTab(0)
         for s in result['sheets']:self.tabs.addTab(s['name'])
         idx=next((i for i,s in enumerate(result['sheets']) if s['name']==prior),0);self.tabs.setCurrentIndex(idx);self.tabs.blockSignals(False);self.display_tab(idx)
         self.inventory_status.setText(f"{result['products']:,}제품 · {result['rows']:,}규격 · 완제품 부족 {result['total80']:,.0f} · 연결 미확인 {result['unmapped']}행\n부족 기준 {result['cycle'].get('current_captured_at','-')} / 재고 {' ~ '.join(result['inventory_times'])}")
         self.export_button.setEnabled(bool(result['rows']));self.detail_page.table.hide();self.detail_page.pagination_bar.show()
+        if result.get('_retained'):
+            self.inventory_status.setText('갱신 중 · 마지막 정상 재고 결과 표시');self.inventory_status.show()
         if not getattr(self,'_stock_warm_started',False):
             self._stock_warm_started=True;self.executor.submit(self.inventory_service.warm_source_cache)
         state=self.inventory_service.cache/'refresh_status.json'

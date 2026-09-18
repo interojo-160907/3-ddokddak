@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import closing
 
 import argparse
 import gzip
@@ -314,7 +315,7 @@ def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, 
     source_hash = _source_hash(product_rows, bom_rows, saline_rows)
     source_refreshed_at = _source_refreshed_at(product_payload, bom_payload)
 
-    with sqlite3.connect(DB_PATH) as connection:
+    with closing(sqlite3.connect(DB_PATH)) as connection, connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
         previous = connection.execute(
@@ -359,7 +360,7 @@ def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, 
         )
         _prune_files(BACKUP_DIR, "product_reference_before_*.sqlite", BACKUP_RETENTION_COUNT)
 
-    with sqlite3.connect(DB_PATH) as connection:
+    with closing(sqlite3.connect(DB_PATH)) as connection, connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
         previous_products = connection.execute(

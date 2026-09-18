@@ -1,5 +1,6 @@
 """Read-only demand/BOM join. Inventory is never allocated again by order filters."""
 from __future__ import annotations
+from contextlib import closing
 import collections
 import concurrent.futures
 import hashlib
@@ -19,6 +20,7 @@ from config import DATA_CENTER_DIR, DATA_DIR
 from services.process_status_service import _channel, classification_sort_key
 from services.live_production_need_service import DB_PATH as LIVE_DB_PATH
 from services.hydration_instruction_service import HydrationInstructionService
+from services.item_code_service import credential_value
 
 HEADERS = ['신규분류요약','품명','파워 / CP / AXIS / ADD','사출코드','분리코드','제품코드',
            '사출창고','분리창고','수화 지시량','검사접착',
@@ -48,7 +50,7 @@ def hydration_shortage(final_shortage, leak_inventory, inspection_inventory, ins
     return max(0.0,float(final_shortage or 0)-float(leak_inventory or 0)-float(inspection_inventory or 0)-float(instruction_qty or 0))
 
 def read_tables(path, tables):
-    with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as c:
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as c:
         c.row_factory=sqlite3.Row
         c.execute('BEGIN')
         return {t:[dict(r) for r in c.execute('SELECT * FROM '+t)] for t in tables}
@@ -86,7 +88,7 @@ class InventoryStatusService:
 
     @staticmethod
     def _filter_key(filters):
-        clean=dict(filters or {})
+        clean={'markets':['전체'],'classes':['전체'],'search':'','detail_search':'','due':None,'process':'전체', **(filters or {})}
         for key in ('markets','classes'):
             if key in clean:clean[key]=sorted(str(x) for x in (clean[key] or []))
         return json.dumps(clean,ensure_ascii=False,sort_keys=True,separators=(',',':'))
@@ -123,13 +125,18 @@ class InventoryStatusService:
         while len(self._memory_results)>8:self._memory_results.popitem(last=False)
 
     def _request(self, name, endpoint, params):
-        url='https://plan.interojo.net'+endpoint+'?'+urllib.parse.urlencode(params)
-        request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0','Accept':'application/json'})
+        base=os.getenv('DDOKDDAK_PROD3_API_BASE_URL','https://plan.interojo.net').rstrip('/')
+        url=base+endpoint+'?'+urllib.parse.urlencode(params)
+        headers={'User-Agent':'Mozilla/5.0','Accept':'application/json'}
+        key=(os.getenv('DDOKDDAK_PROD3_API_KEY',os.getenv('PLAN_API_KEY','')).strip()
+             or credential_value('DDOKDDAK_PROD3_API_KEY') or credential_value('PLAN_API_KEY'))
+        if key:headers['X-API-Key']=key
+        request=urllib.request.Request(url,headers=headers)
         last_error=None
         for attempt in range(2):
             try:
                 with urllib.request.urlopen(request,timeout=45) as response:data=json.load(response)
-                if data.get('truncated') or not isinstance(data.get('rows'),list):raise ValueError(name+' 불완전 응답')
+                if not isinstance(data,dict) or data.get('truncated') or not isinstance(data.get('rows'),list):raise ValueError(name+' 불완전 응답')
                 if data.get('total_count') is not None and len(data['rows'])!=int(data['total_count']):raise ValueError(name+' 행 수 불일치')
                 break
             except (OSError,ValueError,TypeError,json.JSONDecodeError) as exc:
@@ -137,6 +144,16 @@ class InventoryStatusService:
                 if attempt == 0:time.sleep(.6)
         else:
             raise last_error
+        return self.save_response(name,data)
+
+    def save_response(self,name,data):
+        if not isinstance(data,dict) or data.get('truncated') or not isinstance(data.get('rows'),list):
+            raise ValueError(name+' 불완전 응답')
+        if data.get('total_count') is not None and len(data['rows'])!=int(data['total_count']):
+            raise ValueError(name+' 행 수 불일치')
+        data=dict(data)
+        if data.pop('_reused',False):
+            return {'status':'success','completed_at':data['_collected_at'],'rows':len(data['rows']),'reused':True}
         data['_collected_at']=datetime.now().isoformat(timespec='seconds')
         target=self.cache/(name+'.json');tmp=target.with_suffix('.tmp')
         tmp.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8');tmp.replace(target)
@@ -147,10 +164,9 @@ class InventoryStatusService:
 
     def refresh_stock(self):
         today=date.today().isoformat()
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
-            jobs=[pool.submit(self._request,'inventory_'+wh,'/api/inventory-ledger-product',
-                 {'date_from':today,'date_to':today,'wh_nm':wh,'limit':0}) for wh in WAREHOUSES]
-            for job in jobs: job.result()
+        for wh in WAREHOUSES:
+            self._request('inventory_'+wh,'/api/inventory-ledger-product',
+                          {'date_from':today,'date_to':today,'wh_nm':wh,'limit':0})
 
     def _stock_counts(self):
         with self._stock_cache_lock:
@@ -159,7 +175,7 @@ class InventoryStatusService:
             for wh,path in zip(WAREHOUSES,paths):
                 try:
                     stat=path.stat();signature.append((stat.st_size,stat.st_mtime_ns))
-                except OSError:raise ValueError(wh+' 재고 수집에 실패해 확인할 스냅샷이 없습니다. 지금 갱신을 눌러 주세요.')
+                except OSError:raise ValueError(wh+' 재고 스냅샷 미수집')
             signature=tuple(signature)
             if signature==self._stock_cache_signature and self._stock_cache_value is not None:return self._stock_cache_value
             stock={};times=[]
@@ -175,10 +191,22 @@ class InventoryStatusService:
         """Warm compact warehouse totals after the first view is visible."""
         self._stock_counts()
 
-    def build(self, filters=None):
+    def build(self, filters=None, *, allow_network=False, collecting=False):
         f=filters or {};key=self._filter_key(f);signature=self._source_signature()
+        if not collecting:
+            try:report=json.loads((self.cache/'refresh_status.json').read_text('utf-8'))
+            except (OSError,ValueError):report={}
+            if report and (report.get('status')!='success' or report.get('result',{}).get('status')!='success'):
+                cached=self.retained_result(f)
+                if cached is not None:return cached
+                self._stock_counts()  # Name any missing warehouse immediately.
+                raise ValueError('재고·실적·수화 지시 수집 대기 · 완료 후 자동으로 표시됩니다.')
         cached=self._cached_result(key,signature)
         if cached is not None:return cached
+        # Fail before requesting hundreds of product specifications on a new PC.
+        stock,times=self._stock_counts();hydration=self.hydration_service.load()
+        if hydration.get('status')!='success':raise ValueError('수화 지시 스냅샷 미수집')
+        hydration_qty=hydration.get('quantities') or {}
         live=read_tables(LIVE_DB_PATH,['aps_plan','cycle_meta'])
         bom=read_tables(DATA_CENTER_DIR/'bom/product_reference.sqlite',['product_name_master','bom_relation'])
         plans=live['aps_plan'];master={norm(x['nm_cd']):x for x in bom['product_name_master']}
@@ -210,6 +238,8 @@ class InventoryStatusService:
             codes.update(c for c in children[b] if c.startswith('R'))
         codes.update(norm(x['item_id'])[:5] for x in selected if norm(x['item_id']).startswith(('Q','R')))
         missing=[b for b in codes if not (self.cache/('item_'+b+'.json')).exists()]
+        if missing and not allow_network:
+            raise ValueError(f'제품 규격 {len(missing)}종 수집 대기')
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
             for job in [pool.submit(self._request,'item_'+b,'/api/item-list-bulk',{'gd_cd':b,'limit':0}) for b in missing]:job.result()
         items={};byopt={};lookup={}
@@ -218,7 +248,6 @@ class InventoryStatusService:
             rr={norm(x['gd_cd']):x for x in data['rows'] if norm(x.get('sale_cd'))==b}
             items[b]=rr;lookup.update(rr);byopt[b]=collections.defaultdict(set)
             for code,row in rr.items():byopt[b][specs(row)].add(code)
-        stock,times=self._stock_counts();hydration=self.hydration_service.load();hydration_qty=hydration.get('quantities') or {}
         need=collections.defaultdict(collections.Counter);due={}
         for x in selected:
             code=norm(x['item_id']);need[code][x['oper_id']]+=float(x.get('plan_qty') or 0)
@@ -260,8 +289,24 @@ class InventoryStatusService:
                 'hydration':{**{k:v for k,v in hydration.items() if k!='quantities'},
                              'calculation_mode':'downstream_inventory_formula'}}
         final_signature=self._source_signature()
-        if final_signature==signature:self._save_result(key,signature,result)
+        if final_signature!=signature:raise ValueError('원천 데이터 갱신 중 · 완료 후 다시 표시됩니다.')
+        result['_complete_cycle']=True
+        self._save_result(key,signature,result)
         return result
+
+    def retained_result(self,filters=None):
+        """Only reuse an exact-filter, previously completed result; never stale raw inputs."""
+        key=self._filter_key(filters or {})
+        cached=self._memory_results.get(key)
+        result=cached[1] if cached else None
+        if result is None:
+            try:
+                with gzip.open(self._snapshot_path(key),'rt',encoding='utf-8') as stream:
+                    payload=json.load(stream)
+                if payload.get('filter_key')==key:result=payload.get('result')
+            except (OSError,ValueError):pass
+        if not result or not result.get('_complete_cycle'):return None
+        return {**result,'_retained':True}
 
 def export_inventory(result, filename):
     # Application exporter follows the existing application's XlsxWriter runtime.

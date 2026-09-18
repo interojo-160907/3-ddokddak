@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import re
@@ -9,7 +10,6 @@ import sqlite3
 import sys
 import time
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
@@ -53,17 +53,7 @@ LOT_BASE_PATTERN = re.compile(r"^([A-Z]\d{8}-\d{3})(?:-.+)?$")
 CALCULATION_REVISION = 2
 
 
-def _collection_worker_count() -> int:
-    try:
-        configured = int(
-            os.getenv("DDOKDDAK_PROD3_LIVE_WORKERS", str(len(WAREHOUSES)))
-        )
-    except ValueError:
-        configured = len(WAREHOUSES)
-    return max(1, min(len(WAREHOUSES), configured))
-
-
-COLLECTION_WORKERS = _collection_worker_count()
+COLLECTION_WORKERS = 1
 
 
 class WipCycleNotReady(RuntimeError):
@@ -148,9 +138,13 @@ def _request(
                 headers=headers,
                 timeout=timeout,
             )
-            response.raise_for_status()
-            response.encoding = "utf-8"
-            payload = response.json()
+            try:
+                response.raise_for_status()
+                response.encoding = "utf-8"
+                payload = response.json()
+            finally:
+                response.close()
+            if not isinstance(payload,dict):raise ValueError(endpoint+' invalid JSON object')
             if payload.get("truncated") and not allow_truncated:
                 raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
             return payload
@@ -254,33 +248,31 @@ def _collect_wip(
         )
         return stage, warehouse_code, warehouse_name, payload
 
-    # 동일 시점의 서로 독립적인 5개 공정창고를 한 번에 조회한다. 환경변수로
-    # 동시성을 낮출 수 있으며 기본값은 창고 수(5개)다.
-    with ThreadPoolExecutor(max_workers=COLLECTION_WORKERS, thread_name_prefix="live-wip") as executor:
-        results = executor.map(fetch_warehouse, WAREHOUSES)
-        for stage, warehouse_code, warehouse_name, payload in results:
-            source_rows += int(payload.get("total_count") or len(payload.get("rows") or []))
-            source_time = str(payload.get("source_refreshed_at") or "").strip()
-            if source_time:
-                source_times.add(source_time)
-            for row in payload.get("rows") or []:
-                item_id = normalize_text(row.get("item_id"))
-                lot_full, lot_base, derived = lot_identity(row.get("lot_no") or row.get("wip_id"))
-                if not lot_full or item_id not in target_items:
-                    continue
-                kept.append(
-                    {
-                        "warehouse_code": warehouse_code,
-                        "warehouse_name": warehouse_name,
-                        "stage": stage,
-                        "lot_full": lot_full,
-                        "lot_base": lot_base,
-                        "derived": int(derived),
-                        "item_id": item_id,
-                        "quantity": _number(row.get("wip_qty")),
-                        "payload_json": json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
-                    }
-                )
+    # WIP도 기본값은 순차 수집이다. 창고별 원천 회차는 모두 확인한다.
+    results = map(fetch_warehouse, WAREHOUSES)
+    for stage, warehouse_code, warehouse_name, payload in results:
+        source_rows += int(payload.get("total_count") or len(payload.get("rows") or []))
+        source_time = str(payload.get("source_refreshed_at") or "").strip()
+        if source_time:
+            source_times.add(source_time)
+        for row in payload.get("rows") or []:
+            item_id = normalize_text(row.get("item_id"))
+            lot_full, lot_base, derived = lot_identity(row.get("lot_no") or row.get("wip_id"))
+            if not lot_full or item_id not in target_items:
+                continue
+            kept.append(
+                {
+                    "warehouse_code": warehouse_code,
+                    "warehouse_name": warehouse_name,
+                    "stage": stage,
+                    "lot_full": lot_full,
+                    "lot_base": lot_base,
+                    "derived": int(derived),
+                    "item_id": item_id,
+                    "quantity": _number(row.get("wip_qty")),
+                    "payload_json": json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
+                }
+            )
     if len(source_times) != 1:
         raise WipCycleNotReady(
             f"5개 APS WIP의 원천 회차가 일치하지 않습니다: {sorted(source_times)}"
@@ -309,25 +301,21 @@ def probe_wip_source(api_key: str, timeout: int) -> dict[str, Any]:
         )
         return stage, warehouse_code, warehouse_name, payload
 
-    with ThreadPoolExecutor(
-        max_workers=COLLECTION_WORKERS,
-        thread_name_prefix="live-wip-probe",
-    ) as executor:
-        results = executor.map(fetch_warehouse, WAREHOUSES)
-        for stage, warehouse_code, warehouse_name, payload in results:
-            warehouse_sources.append(
-                {
-                    "stage": stage,
-                    "warehouse_code": warehouse_code,
-                    "warehouse_name": warehouse_name,
-                    "source_refreshed_at": str(
-                        payload.get("source_refreshed_at") or ""
-                    ).strip(),
-                    "source_rows": int(
-                        payload.get("total_count") or len(payload.get("rows") or [])
-                    ),
-                }
-            )
+    results = map(fetch_warehouse, WAREHOUSES)
+    for stage, warehouse_code, warehouse_name, payload in results:
+        warehouse_sources.append(
+            {
+                "stage": stage,
+                "warehouse_code": warehouse_code,
+                "warehouse_name": warehouse_name,
+                "source_refreshed_at": str(
+                    payload.get("source_refreshed_at") or ""
+                ).strip(),
+                "source_rows": int(
+                    payload.get("total_count") or len(payload.get("rows") or [])
+                ),
+            }
+        )
 
     source_times = sorted(
         {
@@ -353,7 +341,8 @@ def probe_wip_source(api_key: str, timeout: int) -> dict[str, Any]:
 
 
 def _collect_inventory(
-    target_items: set[str], date_from: str, date_to: str, api_key: str, timeout: int
+    target_items: set[str], date_from: str, date_to: str, api_key: str, timeout: int,
+    observer=None, progress=None, reuse=None, on_error=None,
 ) -> tuple[list[dict[str, Any]], int]:
     kept: list[dict[str, Any]] = []
     source_rows = 0
@@ -362,7 +351,10 @@ def _collect_inventory(
         warehouse: tuple[int, str, str],
     ) -> tuple[int, str, str, dict[str, Any]]:
         stage, warehouse_code, warehouse_name = warehouse
-        payload = _request(
+        if progress is not None:progress(warehouse_name)
+        query = {'date_from': date_from, 'date_to': date_to, 'wh_nm': warehouse_name}
+        payload = reuse(warehouse_name, query) if reuse else None
+        if payload is None:payload = _request(
             "/api/inventory-ledger-product",
             {
                 "date_from": date_from,
@@ -372,39 +364,54 @@ def _collect_inventory(
                 "prompt_context": "똑딱이 2.1 공정창고 수불",
             },
             api_key,
-            timeout,
+            min(timeout, 30),
+            attempts=2,
         )
+        if not isinstance(payload.get('rows'),list) or payload.get('truncated'):
+            raise ValueError(warehouse_name+' 수불 응답 불완전')
+        if payload.get('total_count') is not None and len(payload['rows'])!=int(payload['total_count']):
+            raise ValueError(warehouse_name+' 수불 행 수 불일치')
+        payload = dict(payload, _inventory_query=query)
+        if observer is not None:observer(warehouse_name,payload)
         return stage, warehouse_code, warehouse_name, payload
 
-    # 창고별 API 호출은 서로 독립적이므로 기본 5개를 동시에 수집한다.
-    with ThreadPoolExecutor(max_workers=COLLECTION_WORKERS, thread_name_prefix="live-inventory") as executor:
-        results = executor.map(fetch_warehouse, WAREHOUSES)
-        for stage, warehouse_code, warehouse_name, payload in results:
-            source_rows += int(payload.get("total_count") or len(payload.get("rows") or []))
-            for row in payload.get("rows") or []:
-                item_id = normalize_text(row.get("gd_cd"))
-                lot_full, lot_base, derived = lot_identity(row.get("lot_no"))
-                if not lot_full or item_id not in target_items:
-                    continue
-                sub_lot = normalize_text(row.get("sub_lot"))
-                kept.append(
-                    {
-                        "snapshot_key": "|".join((warehouse_code, lot_full, sub_lot, item_id)),
-                        "warehouse_code": warehouse_code,
-                        "warehouse_name": warehouse_name,
-                        "stage": stage,
-                        "lot_full": lot_full,
-                        "lot_base": lot_base,
-                        "derived": int(derived),
-                        "sub_lot": sub_lot,
-                        "item_id": item_id,
-                        "lm_qty": _number(row.get("lm_qty")),
-                        "ip_qty": _number(row.get("ip_qty")),
-                        "chul_qty": _number(row.get("chul_qty")),
-                        "stock_qty": _number(row.get("stock_qty")),
-                        "payload_json": json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
-                    }
-                )
+    # Persist successful warehouses even if a different warehouse fails. Never
+    # turn transport errors into an empty warehouse or publish partial live data.
+    errors = []
+    def collect_each():
+        for warehouse in WAREHOUSES:
+            try:yield fetch_warehouse(warehouse)
+            except Exception as exc:
+                errors.append(warehouse[2] + ': ' + str(exc))
+                if on_error:on_error(warehouse[2], str(exc))
+    results = collect_each()
+    for stage, warehouse_code, warehouse_name, payload in results:
+        source_rows += int(payload.get("total_count") or len(payload.get("rows") or []))
+        for row in payload.get("rows") or []:
+            item_id = normalize_text(row.get("gd_cd"))
+            lot_full, lot_base, derived = lot_identity(row.get("lot_no"))
+            if not lot_full or item_id not in target_items:
+                continue
+            sub_lot = normalize_text(row.get("sub_lot"))
+            kept.append(
+                {
+                    "snapshot_key": "|".join((warehouse_code, lot_full, sub_lot, item_id)),
+                    "warehouse_code": warehouse_code,
+                    "warehouse_name": warehouse_name,
+                    "stage": stage,
+                    "lot_full": lot_full,
+                    "lot_base": lot_base,
+                    "derived": int(derived),
+                    "sub_lot": sub_lot,
+                    "item_id": item_id,
+                    "lm_qty": _number(row.get("lm_qty")),
+                    "ip_qty": _number(row.get("ip_qty")),
+                    "chul_qty": _number(row.get("chul_qty")),
+                    "stock_qty": _number(row.get("stock_qty")),
+                    "payload_json": json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
+                }
+            )
+    if errors:raise RuntimeError('; '.join(errors))
     return kept, source_rows
 
 
@@ -857,7 +864,7 @@ def _backup_and_replace(temporary_db: Path, stamp: str) -> None:
             pass
 
 
-def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
+def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, inventory_progress=None, inventory_reuse=None, inventory_error=None) -> dict[str, Any]:
     refresh_started = time.perf_counter()
     phase_seconds: dict[str, float] = {}
     now = datetime.now().astimezone()
@@ -888,6 +895,7 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
     wip_source = str(previous_meta.get("wip_source_refreshed_at") or "")
     wip_source_rows = 0
     if new_cycle:
+        if inventory_progress:inventory_progress('WIP 회차 확인')
         previous_wip = str(previous_meta.get("wip_source_refreshed_at") or "")
         phase_started = time.perf_counter()
         wip_probe = probe_wip_source(api_key, min(timeout, 30))
@@ -939,8 +947,9 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
             return result
         phase_started = time.perf_counter()
         try:
+            if inventory_progress:inventory_progress('WIP 기준 스냅샷 수집')
             wip_rows, wip_source, wip_source_rows = _collect_wip(
-                target_items, api_key, timeout
+                target_items, api_key, min(timeout,60)
             )
         except WipCycleNotReady as exc:
             result = {
@@ -980,14 +989,20 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
 
     phase_started = time.perf_counter()
     inventory_rows, inventory_source_rows = _collect_inventory(
-        target_items, baseline_from, date_to, api_key, timeout
+        target_items, baseline_from, date_to, api_key, timeout,
+        **({'observer':inventory_observer} if inventory_observer is not None else {}),
+        **({'reuse':inventory_reuse} if inventory_reuse is not None else {}),
+        **({'on_error':inventory_error} if inventory_error is not None else {}),
+        **({'progress':inventory_progress} if inventory_progress is not None else {}),
     )
     phase_seconds["inventory"] = round(time.perf_counter() - phase_started, 3)
     phase_started = time.perf_counter()
+    if inventory_progress:inventory_progress('완료실적 수집')
     production_rows, production_source_rows = _collect_production(
         target_items, baseline_from, date_to, api_key, timeout
     )
     phase_seconds["production"] = round(time.perf_counter() - phase_started, 3)
+    if inventory_progress:inventory_progress('부족수량 계산')
     if _aps_cycle() != aps_cycle:
         raise RuntimeError("계산 수집 중 APS 회차가 바뀌어 마지막 정상 결과를 유지합니다.")
 
@@ -1022,7 +1037,7 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
     phase_seconds["calculation"] = round(time.perf_counter() - phase_started, 3)
     _backup_and_replace(temporary_db, stamp)
 
-    with sqlite3.connect(DB_PATH) as connection:
+    with closing(sqlite3.connect(DB_PATH)) as connection:
         stored_rows = int(connection.execute("SELECT COUNT(*) FROM aps_plan").fetchone()[0])
         remaining_rows = int(
             connection.execute(
@@ -1038,7 +1053,8 @@ def refresh(api_key: str = "", timeout: int = 240) -> dict[str, Any]:
         "wip_checked_at": captured_at if new_cycle else previous_status.get("wip_checked_at"),
         "wip_monitoring": False,
         "baseline_date_from": baseline_from,
-        "refreshed_at": captured_at,
+        "refreshed_at": datetime.now().astimezone().isoformat(timespec='seconds'),
+        "collection_started_at": captured_at,
         "reset": new_cycle,
         "aps_changed": aps_changed,
         "stored_rows": stored_rows,

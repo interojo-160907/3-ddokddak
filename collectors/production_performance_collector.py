@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import closing
 
 import argparse
 import gzip
@@ -333,7 +334,7 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
             connection.close()
     _prune(BACKUP_DIR, "production_performance_before_*.sqlite", 10)
     _prune(RAW_DIR, "production_*.json.gz", 14)
-    with sqlite3.connect(DB_PATH) as verify_connection:
+    with closing(sqlite3.connect(DB_PATH)) as verify_connection:
         stored_rows = int(verify_connection.execute("SELECT COUNT(*) FROM production_performance").fetchone()[0])
     result = {
         "status": "success", "database": str(DB_PATH), "date_from": history_start.isoformat(),

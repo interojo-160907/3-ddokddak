@@ -294,6 +294,9 @@ class DataTable(Card):
         self._product_list.viewport().installEventFilter(self)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
+        from shiboken6 import isValid
+        if any(not isValid(obj) for obj in (self.table,self._product_popup,self._product_list)):
+            return super().eventFilter(watched,event)
         viewport = self.table.viewport() if hasattr(self, "table") else None
         if watched is viewport:
             if event.type() == QEvent.ToolTip:

@@ -97,7 +97,8 @@ class LiveProductionNeedPage(ProcessOverviewPage):
     def set_refreshing(self, refreshing: bool) -> None:
         self._refreshing = refreshing
         self.live_refresh_button.setEnabled(not refreshing)
-        self.live_refresh_button.setText("계산 중…" if refreshing else "지금 갱신")
+        self.live_refresh_button.setText("수집 중…" if refreshing else "지금 갱신")
+        if not refreshing:self._show_cycle_status()
         if refreshing:
             self.calculation_status.setText("새 APS 기준 WIP·재고·실적·수화 지시 수집 중")
             self.calculation_status.setProperty("status", "warning")
@@ -116,6 +117,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
             self._show_cycle_status()
 
     def _show_cycle_status(self) -> None:
+        if getattr(self,'_refreshing',False):return
         status = self.service.status()
         aps_time = _display_time(status.get("aps_source_refreshed_at"))
         calculated = _display_time(status.get("refreshed_at"))
@@ -152,7 +154,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
             target.setToolTip(
                 "지금 갱신을 누르면 현재 APS 회차를 기준으로 계산을 시작합니다."
             )
-        target.setVisible(self.fixed_process is None)
+        target.setVisible(self.fixed_process is None and getattr(self,'_external_header_visible',True))
         _repolish(target)
 
     def _update_kpis(self, rows: list[dict]) -> None:
