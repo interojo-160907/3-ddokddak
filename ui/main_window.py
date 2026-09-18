@@ -4880,6 +4880,8 @@ class MainWindow(QMainWindow):
             title_label.setObjectName("CardTitle")
             desc_label = QLabel(description)
             desc_label.setObjectName("CardSub")
+            desc_label.setWordWrap(True)
+            desc_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             value_label = QLabel(value)
             value_label.setObjectName("SettingsValue")
             value_label.setWordWrap(True)
@@ -4908,6 +4910,8 @@ class MainWindow(QMainWindow):
         distribution_title.setObjectName("CardTitle")
         distribution_description = QLabel("신규 사용자에게 최신 설치파일 주소를 전달할 수 있습니다. 설치 후 등록되지 않은 PC는 사용 권한을 요청합니다.")
         distribution_description.setObjectName("CardSub")
+        distribution_description.setWordWrap(True)
+        distribution_description.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         distribution_value = QLabel(DEFAULT_UPDATE_URL)
         distribution_value.setObjectName("SettingsValue")
         distribution_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -4957,6 +4961,9 @@ class MainWindow(QMainWindow):
         self.settings_data_status = QLabel("상태 확인 중")
         self.settings_data_status.setObjectName("SettingsValue")
         self.settings_data_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.settings_data_status.setWordWrap(True)
+        self.settings_data_status.setMinimumWidth(0)
+        self.settings_data_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         text_layout.addWidget(title)
         text_layout.addWidget(description)
         text_layout.addWidget(self.settings_data_status)
@@ -5003,6 +5010,9 @@ class MainWindow(QMainWindow):
             name_label.setObjectName("CollectionName")
             sub_label = QLabel(subtext)
             sub_label.setObjectName("CollectionSub")
+            sub_label.setWordWrap(True)
+            sub_label.setMinimumWidth(0)
+            sub_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             name_box.addWidget(name_label)
             name_box.addWidget(sub_label)
             grid.addLayout(name_box, row_index, 0)
@@ -5059,8 +5069,9 @@ class MainWindow(QMainWindow):
                 "refreshed": refreshed, "rows": rows,
                 "schedule": schedule, "manual": manual,
             }
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(3, 1)
+        for column, stretch in enumerate((4, 1, 2, 2, 1, 2, 1)):
+            grid.setColumnMinimumWidth(column, 0)
+            grid.setColumnStretch(column, stretch)
         detail_layout.addLayout(grid)
 
         footer = QHBoxLayout()

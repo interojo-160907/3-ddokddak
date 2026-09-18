@@ -144,6 +144,28 @@ class SidebarAndRiskUiTest(unittest.TestCase):
         window.lot_fixed_process_pages["lot_hydration"].reload_data.assert_called_once_with()
         window.deleteLater()
 
+    def test_settings_page_fits_without_horizontal_scroll(self) -> None:
+        window = self._bare_window()
+        window.collection_schedule = {
+            "bom_minutes": 60,
+            "aps_minutes": 1,
+            "production_minutes": 60,
+            "live_minutes": 60,
+            "hydration_minutes": 0,
+        }
+        window._api_health_results = {}
+        window._api_health_details = {}
+
+        page = window._build_settings_page()
+        page.resize(780, 700)
+        page.show()
+        self.app.processEvents()
+
+        self.assertEqual(0, page.horizontalScrollBar().maximum())
+        self.assertTrue(window.settings_data_status.wordWrap())
+        page.deleteLater()
+        window.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()
