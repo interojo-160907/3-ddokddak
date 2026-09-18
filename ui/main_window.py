@@ -1752,6 +1752,7 @@ class MainWindow(QMainWindow):
         self.data_status = QPushButton("●  데이터 연결 전")
         self.data_status.setObjectName("DataStatusChip")
         self.data_status.setFocusPolicy(Qt.NoFocus)
+        self.data_status.setFixedHeight(34)
         self.data_status.clicked.connect(self._open_collection_status)
         header_top_row.addWidget(self.data_status, 0, Qt.AlignTop)
         self.global_refresh_button = QPushButton("새로고침")
@@ -2134,20 +2135,20 @@ class MainWindow(QMainWindow):
             self.data_status.setCursor(Qt.ArrowCursor)
             self.data_status.setStyleSheet(
                 "QPushButton { background:#ECFDF5; color:#087F5B; border:1px solid #9CE2C5; "
-                "border-radius:10px; padding:7px 14px; font-weight:700; }"
+                "border-radius:8px; padding:0 12px; font-size:11px; font-weight:700; }"
             )
         else:
             self.data_status.setCursor(Qt.PointingHandCursor)
             self.data_status.setStyleSheet(
                 "QPushButton { background:#FFF7ED; color:#B45309; border:1px solid #FDBA74; "
-                "border-radius:10px; padding:7px 14px; font-weight:800; }"
+                "border-radius:8px; padding:0 12px; font-size:11px; font-weight:800; }"
                 "QPushButton:hover { background:#FFEDD5; border-color:#F97316; }"
                 "QPushButton:pressed { background:#FED7AA; }"
             )
         if status_text.startswith("수집 정상") and "확인 필요" not in status_text:
             self.data_status.setStyleSheet(
                 "QPushButton { background:#EFF6FF; color:#2563EB; border:1px solid #BFDBFE; "
-                "border-radius:10px; padding:7px 14px; font-weight:700; }")
+                "border-radius:8px; padding:0 12px; font-size:11px; font-weight:700; }")
         self.data_status.style().unpolish(self.data_status)
         self.data_status.style().polish(self.data_status)
         if hasattr(self, 'inventory_page') and self._current_page in {'inventory','live_need','lot_work_order'}:
@@ -2163,9 +2164,9 @@ class MainWindow(QMainWindow):
                     )
                     self.data_status.setToolTip(json.dumps(report,ensure_ascii=False,indent=2))
                     self.data_status.setStyleSheet(
-                        'QPushButton {background:#EAF3FF;color:#0877F9;border:1px solid #B9D7FF;border-radius:10px;padding:7px 14px;}'
+                        'QPushButton {background:#EAF3FF;color:#0877F9;border:1px solid #B9D7FF;border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;}'
                         if report.get('status') == 'success' else
-                        'QPushButton {background:#FFF6DD;color:#805200;border:1px solid #DFC994;border-radius:10px;padding:7px 14px;}'
+                        'QPushButton {background:#FFF6DD;color:#805200;border:1px solid #DFC994;border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;}'
                     )
                 except (OSError,ValueError):pass
 
