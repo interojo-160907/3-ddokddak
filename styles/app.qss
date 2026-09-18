@@ -176,7 +176,7 @@ QLabel#PageDescription {
     font-size: 13px;
 }
 
-QPushButton#DataStatusChip {
+QLabel#DataStatusChip {
     min-height: 30px;
     padding: 0 12px;
     color: #7A5B13;
@@ -187,7 +187,7 @@ QPushButton#DataStatusChip {
     font-weight: 700;
 }
 
-QPushButton#DataStatusChip[state="ready"] {
+QLabel#DataStatusChip[state="ready"] {
     color: #087A55;
     background: #ECFDF5;
     border-color: #A7E3CB;

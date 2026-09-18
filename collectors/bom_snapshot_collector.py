@@ -1,5 +1,4 @@
 from __future__ import annotations
-from contextlib import closing
 
 import argparse
 import gzip
@@ -14,11 +13,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import requests
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
-from services.erp_api_client import request_json
 from services.data_location import resolve_data_root
 
 DATA_DIR = Path(
@@ -56,8 +55,17 @@ SALINE_FIELDS = (
 
 
 def _fetch(endpoint: str, api_key: str, timeout: int) -> dict[str, Any]:
-    payload = request_json(endpoint, {"limit": 0, "prompt_context": "똑딱이 생산3팀 BOM 스냅샷 갱신"},
-                           api_key=api_key, timeout=min(timeout, 60))
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+    response = requests.get(
+        f"{BASE_URL}{endpoint}",
+        params={"limit": 0, "prompt_context": "똑딱이 생산3팀 BOM 스냅샷 갱신"},
+        headers=headers,
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
     if payload.get("truncated"):
         raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
     if not payload.get("rows"):
@@ -306,7 +314,7 @@ def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, 
     source_hash = _source_hash(product_rows, bom_rows, saline_rows)
     source_refreshed_at = _source_refreshed_at(product_payload, bom_payload)
 
-    with closing(sqlite3.connect(DB_PATH)) as connection, connection:
+    with sqlite3.connect(DB_PATH) as connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
         previous = connection.execute(
@@ -351,7 +359,7 @@ def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, 
         )
         _prune_files(BACKUP_DIR, "product_reference_before_*.sqlite", BACKUP_RETENTION_COUNT)
 
-    with closing(sqlite3.connect(DB_PATH)) as connection, connection:
+    with sqlite3.connect(DB_PATH) as connection:
         connection.row_factory = sqlite3.Row
         _initialize(connection)
         previous_products = connection.execute(
@@ -452,7 +460,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=240)
     args = parser.parse_args()
     result = refresh(
-        api_key="",
+        api_key=os.getenv("PLAN_API_KEY", ""),
         timeout=args.timeout,
         force=args.force,
     )
