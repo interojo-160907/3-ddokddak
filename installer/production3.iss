@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "2.7.2"
+#define MyAppVersion "2.7.3"
 #define MyAppExeName "gui_app_pyside6.exe"
 #define MySourceDir "..\dist\production3"
 
@@ -149,6 +149,8 @@ begin
   ForceDirectories(Root + 'production-performance\raw_api');
   ForceDirectories(Root + 'live-production-need\snapshot');
   ForceDirectories(Root + 'live-production-need\backup');
+  ForceDirectories(Root + 'inventory-status\snapshots');
+  ForceDirectories(Root + 'inventory-status\view-snapshots');
   ForceDirectories(Root + 'settings');
   ForceDirectories(Root + '안전모드');
 end;

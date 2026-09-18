@@ -142,7 +142,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
         self.lot_refresh_button.setFixedHeight(30)
         self.lot_refresh_button.setMinimumWidth(90)
         self.lot_refresh_button.setToolTip(
-            "현재 5개 공정창고와 완료 생산실적을 다시 수집해 LOT 작업 순서 기준을 계산합니다."
+            "현재 WIP·완료 생산실적·공정 재고와 수화 지시를 같은 회차로 다시 수집해 LOT 작업 순서 기준을 계산합니다."
         )
         self.lot_refresh_button.clicked.connect(self._request_refresh)
         self.lot_refresh_button.setVisible(fixed_process is None)
@@ -826,7 +826,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
         self.lot_refresh_button.setEnabled(not refreshing)
         self.lot_refresh_button.setText("계산 중…" if refreshing else "지금 갱신")
         if refreshing:
-            self.calculation_status.setText("WIP·재고·완료실적 수집 중")
+            self.calculation_status.setText("WIP·재고·완료실적·수화 지시 수집 중")
             self.calculation_status.setProperty("status", "warning")
             self.calculation_status.setToolTip(
                 "실시간 실적 반영과 같은 원천 데이터를 수집한 뒤 LOT 작업 순서 기준을 다시 계산합니다."

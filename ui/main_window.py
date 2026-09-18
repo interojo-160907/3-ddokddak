@@ -1458,7 +1458,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "live_need_page"):
                 self.live_need_page._show_cycle_status()
             if hasattr(self, "lot_work_order_page"):
-                self.lot_work_order_page.refresh_calculation_status()
+                self.lot_work_order_page.reload_data()
             self._refresh_settings_data_status()
             self._refresh_header_status()
 
@@ -1490,7 +1490,7 @@ class MainWindow(QMainWindow):
             for page in getattr(self, "live_fixed_process_pages", {}).values():
                 page.reload_data()
             if hasattr(self, "lot_work_order_page"):
-                self.lot_work_order_page.refresh_calculation_status()
+                self.lot_work_order_page.reload_data()
             for page in getattr(self, "lot_fixed_process_pages", {}).values():
                 page.reload_data()
         elif "production" in changed:

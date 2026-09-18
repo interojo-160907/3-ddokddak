@@ -119,6 +119,31 @@ class SidebarAndRiskUiTest(unittest.TestCase):
         self.assertFalse(badges[1].isHidden())
         window.deleteLater()
 
+    def test_live_refresh_reloads_live_inventory_and_lot_overview(self) -> None:
+        window = self._bare_window()
+        window.dashboard_service = Mock()
+        window.dashboard_service.load.return_value = {}
+        window._close_order_detail = Mock()
+        window._refresh_risk_alerts = Mock()
+        window._refresh_dashboard_channel_metrics = Mock()
+        window._populate_process_matrix_table = Mock()
+        window._selected_production_period = Mock(return_value={})
+        window._refresh_settings_data_status = Mock()
+        window._refresh_header_status = Mock()
+        window.live_need_page = Mock()
+        window.inventory_page = Mock()
+        window.live_fixed_process_pages = {"live_hydration": Mock()}
+        window.lot_work_order_page = Mock()
+        window.lot_fixed_process_pages = {"lot_hydration": Mock()}
+
+        window._reload_changed_data_views({"live"})
+
+        window.live_need_page.reload_data.assert_called_once_with()
+        window.inventory_page.reload_data.assert_called_once_with()
+        window.lot_work_order_page.reload_data.assert_called_once_with()
+        window.lot_fixed_process_pages["lot_hydration"].reload_data.assert_called_once_with()
+        window.deleteLater()
+
 
 if __name__ == "__main__":
     unittest.main()
