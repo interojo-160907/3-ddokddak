@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 from collectors.production_performance_collector import should_run_daily_full
 from config import collection_directories
-from ui.main_window import MainWindow, _collector_executable
+from ui.main_window import MainWindow, _collector_executable, _version_bootstrap_ready
 
 
 class CollectionDirectoryTests(unittest.TestCase):
@@ -32,6 +32,30 @@ class CollectionDirectoryTests(unittest.TestCase):
             }
             self.assertTrue(all(path.is_dir() for path in expected))
             self.assertTrue((root / "settings").is_dir())
+
+
+class VersionBootstrapTests(unittest.TestCase):
+    def test_partial_inventory_does_not_repeat_every_base_collector(self) -> None:
+        report = {
+            "completed_at": datetime.now().isoformat(timespec="seconds"),
+            "results": {
+                key: {"status": "success"}
+                for key in ("bom", "aps", "production", "live")
+            },
+        }
+        self.assertTrue(_version_bootstrap_ready(report))
+
+    def test_failed_base_collector_keeps_bootstrap_incomplete(self) -> None:
+        report = {
+            "completed_at": datetime.now().isoformat(timespec="seconds"),
+            "results": {
+                "bom": {"status": "error"},
+                "aps": {"status": "success"},
+                "production": {"status": "success"},
+                "live": {"status": "success"},
+            },
+        }
+        self.assertFalse(_version_bootstrap_ready(report))
 
 
 class ProductionCatchupTests(unittest.TestCase):

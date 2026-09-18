@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import threading
+import time
 import urllib.parse
 import urllib.request
 from datetime import date, datetime
@@ -124,9 +125,18 @@ class InventoryStatusService:
     def _request(self, name, endpoint, params):
         url='https://plan.interojo.net'+endpoint+'?'+urllib.parse.urlencode(params)
         request=urllib.request.Request(url,headers={'User-Agent':'Mozilla/5.0','Accept':'application/json'})
-        with urllib.request.urlopen(request,timeout=60) as response: data=json.load(response)
-        if data.get('truncated') or not isinstance(data.get('rows'),list): raise ValueError(name+' 불완전 응답')
-        if data.get('total_count') is not None and len(data['rows'])!=int(data['total_count']): raise ValueError(name+' 행 수 불일치')
+        last_error=None
+        for attempt in range(2):
+            try:
+                with urllib.request.urlopen(request,timeout=45) as response:data=json.load(response)
+                if data.get('truncated') or not isinstance(data.get('rows'),list):raise ValueError(name+' 불완전 응답')
+                if data.get('total_count') is not None and len(data['rows'])!=int(data['total_count']):raise ValueError(name+' 행 수 불일치')
+                break
+            except (OSError,ValueError,TypeError,json.JSONDecodeError) as exc:
+                last_error=exc
+                if attempt == 0:time.sleep(.6)
+        else:
+            raise last_error
         data['_collected_at']=datetime.now().isoformat(timespec='seconds')
         target=self.cache/(name+'.json');tmp=target.with_suffix('.tmp')
         tmp.write_text(json.dumps(data,ensure_ascii=False),encoding='utf-8');tmp.replace(target)
@@ -149,7 +159,7 @@ class InventoryStatusService:
             for wh,path in zip(WAREHOUSES,paths):
                 try:
                     stat=path.stat();signature.append((stat.st_size,stat.st_mtime_ns))
-                except OSError:raise ValueError(wh+' 재고가 없습니다. ERP 재고 갱신을 눌러 주세요.')
+                except OSError:raise ValueError(wh+' 재고 수집에 실패해 확인할 스냅샷이 없습니다. 지금 갱신을 눌러 주세요.')
             signature=tuple(signature)
             if signature==self._stock_cache_signature and self._stock_cache_value is not None:return self._stock_cache_value
             stock={};times=[]

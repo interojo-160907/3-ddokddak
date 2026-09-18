@@ -9,7 +9,7 @@ from services.data_location import resolve_data_root
 
 APP_NAME = "똑딱이 생산3팀"
 APP_DISPLAY_NAME = "똑딱이 생산3팀 전용"
-APP_VERSION = "2.7.6"
+APP_VERSION = "2.7.7"
 APP_USER_MODEL_ID = (
     "Ddokddak.ProductionTeam3" if getattr(sys, "frozen", False)
     else "Ddokddak.ProductionTeam3.Source"

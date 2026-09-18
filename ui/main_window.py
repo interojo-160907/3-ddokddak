@@ -67,6 +67,15 @@ INVENTORY_STATUS_DATA_DIR = Path(
 )
 
 
+def _version_bootstrap_ready(full_report: dict) -> bool:
+    """A base pass is complete even when one live warehouse needs retry."""
+    results = full_report.get("results") or {}
+    required = ("bom", "aps", "production", "live")
+    return bool(full_report.get("completed_at")) and all(
+        (results.get(key) or {}).get("status") == "success" for key in required
+    )
+
+
 def _collector_executable() -> str:
     if getattr(sys, "frozen", False) or sys.platform != "win32":
         return sys.executable
@@ -5855,14 +5864,7 @@ class MainWindow(QMainWindow):
             hydration = self._read_refresh_status(
                 INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
             )
-            full_results = full.get("results") or {}
-            required = ("bom", "aps", "production", "live")
-            bootstrap_ok = (
-                bool(full.get("completed_at"))
-                and all((full_results.get(key) or {}).get("status") == "success" for key in required)
-                and inventory.get("status") == "success"
-                and hydration.get("status") == "success"
-            )
+            bootstrap_ok = _version_bootstrap_ready(full)
             if bootstrap_ok:
                 target = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -5873,6 +5875,8 @@ class MainWindow(QMainWindow):
                             "completed_version": APP_VERSION,
                             "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                             "cycle_id": inventory.get("cycle_id", ""),
+                            "inventory_status": inventory.get("status", "missing"),
+                            "hydration_status": hydration.get("status", "missing"),
                         },
                         ensure_ascii=False,
                         indent=2,

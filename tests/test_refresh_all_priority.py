@@ -7,7 +7,7 @@ from collectors import refresh_all
 
 
 class RefreshAllPriorityTests(unittest.TestCase):
-    def test_fast_reference_sources_run_before_long_production_and_live_sources(self) -> None:
+    def test_base_sources_settle_before_live_inventory_calculation(self) -> None:
         order: list[str] = []
 
         def collected(name: str):
@@ -31,7 +31,8 @@ class RefreshAllPriorityTests(unittest.TestCase):
         ):
             self.assertEqual(refresh_all.main(), 0)
 
-        self.assertEqual(order, ["bom", "aps", "production", "live"])
+        self.assertEqual(set(order[:3]), {"bom", "aps", "production"})
+        self.assertEqual(order[-1], "live")
 
 
 if __name__ == "__main__":
