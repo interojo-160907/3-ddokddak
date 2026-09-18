@@ -1,12 +1,16 @@
 param(
     [Parameter(Mandatory=$true)][string]$PriorInstaller,
     [Parameter(Mandatory=$true)][string]$Installer,
-    [Parameter(Mandatory=$true)][string]$ExpectedVersion
+    [Parameter(Mandatory=$true)][string]$ExpectedVersion,
+    [string]$PriorVersion = '2.6.4'
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Installer upgrade test runs only on a disposable GitHub runner.' }
-$testApp = Join-Path $env:RUNNER_TEMP 'Production3UpgradeTest'
+$testApp = Join-Path $env:RUNNER_TEMP ('Production3UpgradeTest-' + $PriorVersion)
 $registry = 'HKCU:\Software\Interojo\DdokddakProduction3'
+$testData = Join-Path $env:RUNNER_TEMP ('Production3ExistingData-' + $PriorVersion)
+New-Item -Path $registry -Force | Out-Null
+Set-ItemProperty -LiteralPath $registry -Name DataRoot -Value $testData
 function Install-TestVersion([string]$SetupPath) {
     $process = Start-Process -FilePath $SetupPath -ArgumentList @(
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TASKS=""', ('/DIR="' + $testApp + '"')
@@ -16,7 +20,7 @@ function Install-TestVersion([string]$SetupPath) {
 }
 Install-TestVersion $PriorInstaller
 $oldExe = Join-Path $testApp 'gui_app_pyside6.exe'
-if ((Get-Item -LiteralPath $oldExe).VersionInfo.ProductVersion -ne '2.6.4') { throw 'Incorrect legacy installer.' }
+if ((Get-Item -LiteralPath $oldExe).VersionInfo.ProductVersion -ne $PriorVersion) { throw 'Incorrect legacy installer.' }
 $beforeRoot = (Get-ItemProperty -LiteralPath $registry).DataRoot
 if (-not $beforeRoot) { throw 'Legacy data path was not registered.' }
 $settings = Join-Path $beforeRoot 'settings'
@@ -39,4 +43,4 @@ if ($smoke.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report)) { throw 'In
 $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
 if (-not $result.ok -or $result.inventory_simulation.checks.Count -lt 13) { throw 'Incomplete installed simulation.' }
 Get-Content -LiteralPath $report
-Write-Output "PASS: installed v2.6.4 -> v$ExpectedVersion; data root and user settings preserved; inventory simulation completed."
+Write-Output "PASS: installed v$PriorVersion -> v$ExpectedVersion; data root and user settings preserved; inventory simulation completed."

@@ -1,6 +1,12 @@
 name: Build and publish installer
 
 on:
+  workflow_dispatch:
+    inputs:
+      target_version:
+        description: 'Published installer to test against every release from v2.6.4 through v2.7.7'
+        required: true
+        default: 'v2.7.8'
   push:
     tags:
       - "v*"
@@ -10,6 +16,7 @@ permissions:
 
 jobs:
   release:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - name: Check out tagged source
@@ -109,3 +116,42 @@ jobs:
             gh release create $env:TAG_NAME $asset $hash --generate-notes --latest `
               --title $env:TAG_NAME --repo $env:GITHUB_REPOSITORY
           }
+
+  all-version-upgrades:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify every published upgrade path
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_VERSION: ${{ inputs.target_version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $targetDir = Join-Path $env:RUNNER_TEMP 'production3-upgrade-target'
+          gh release download $env:TARGET_VERSION --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $targetDir
+          if ($LASTEXITCODE -ne 0) { throw 'Target installer download failed.' }
+          $releases = gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName,isDraft,isPrerelease | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate published versions.' }
+          $versions = @($releases | Where-Object {
+            -not $_.isDraft -and -not $_.isPrerelease -and $_.tagName -match '^v\d+\.\d+\.\d+$' -and
+            [version]$_.tagName.TrimStart('v') -ge [version]'2.6.4' -and
+            [version]$_.tagName.TrimStart('v') -le [version]'2.7.7'
+          } | Sort-Object { [version]$_.tagName.TrimStart('v') })
+          if ($versions.Count -lt 8) { throw 'Incomplete historical release list.' }
+          $results = @()
+          foreach ($release in $versions) {
+            $tag = $release.tagName
+            $priorDir = Join-Path $env:RUNNER_TEMP ('production3-prior-' + $tag)
+            gh release download $tag --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $priorDir
+            if ($LASTEXITCODE -ne 0) { throw "Legacy installer download failed: $tag" }
+            & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer (Join-Path $targetDir 'ddokddak-production3-setup.exe') -ExpectedVersion $env:TARGET_VERSION.TrimStart('v') -PriorVersion $tag.TrimStart('v')
+            $results += [pscustomobject]@{ from=$tag; to=$env:TARGET_VERSION; status='passed' }
+          }
+          $results | ConvertTo-Json | Set-Content 'upgrade-results.json' -Encoding utf8
+          $results | Format-Table
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upgrade-compatibility-results
+          path: upgrade-results.json
