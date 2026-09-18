@@ -13,16 +13,18 @@ import urllib.request
 from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from services.item_code_service import credential_value
 
 
 DEFAULT_CONFIG = {
-    "endpoint": "",
-    "item_field": "item_cd",
-    "quantity_field": "instruction_qty",
-    "date_field": "instruction_date",
+    "config_version": 3,
+    "endpoint": "/api/hydration-job-list",
+    "item_field": "gd_cd",
+    "quantity_field": "job_qty",
+    "date_field": "job_dt",
     "rows_field": "rows",
-    "lookback_days": 31,
-    "params": {"process_cd": "45", "limit": 0},
+    "lookback_days": 5,
+    "params": {"limit": 0},
 }
 
 
@@ -41,6 +43,13 @@ class HydrationInstructionService:
             value = json.loads(self.config_path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             value = {}
+        # Migrate the placeholder written before the ERP endpoint existed.
+        # A configured non-empty endpoint remains authoritative.
+        if not str(value.get("endpoint") or "").strip() or int(value.get("config_version") or 0) < DEFAULT_CONFIG["config_version"]:
+            value = {**value, **DEFAULT_CONFIG}
+            self.config_path.write_text(
+                json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
         return {**DEFAULT_CONFIG, **value, "params": {**DEFAULT_CONFIG["params"], **value.get("params", {})}}
 
     @staticmethod
@@ -57,11 +66,13 @@ class HydrationInstructionService:
         if endpoint.startswith("/"):
             endpoint = "https://plan.interojo.net" + endpoint
         today = date.today();params = dict(cfg.get("params") or {})
-        params.setdefault("date_from", (today - timedelta(days=int(cfg.get("lookback_days") or 31))).isoformat())
+        lookback_days=max(1,int(cfg.get("lookback_days") or 5))
+        params.setdefault("date_from", (today - timedelta(days=lookback_days-1)).isoformat())
         params.setdefault("date_to", today.isoformat())
         url = endpoint + ("&" if "?" in endpoint else "?") + urllib.parse.urlencode(params)
         headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-        api_key = os.getenv("DDOKDDAK_PROD3_API_KEY", os.getenv("PLAN_API_KEY", "")).strip()
+        api_key = (os.getenv("DDOKDDAK_PROD3_API_KEY", os.getenv("PLAN_API_KEY", "")).strip()
+                   or credential_value("DDOKDDAK_PROD3_API_KEY") or credential_value("PLAN_API_KEY"))
         if api_key: headers["X-API-Key"] = api_key
         with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=120) as response:
             payload = json.load(response)
@@ -71,26 +82,41 @@ class HydrationInstructionService:
             rows=next((payload.get(name) for name in ("rows","data","results","items") if isinstance(payload.get(name),list)),None)
         if not isinstance(rows, list) or payload.get("truncated"):
             raise ValueError("하이드레이션 지시 API 응답이 불완전합니다.")
+        if payload.get("total_count") is not None and len(rows) != int(payload["total_count"]):
+            raise ValueError("하이드레이션 지시 API 전체 건수와 수신 행 수가 다릅니다.")
         item_field = str(cfg.get("item_field") or "item_cd")
         quantity_field = str(cfg.get("quantity_field") or "instruction_qty")
-        normalized=[];quantities=Counter();invalid=0
+        normalized=[];quantities=Counter();invalid=0;identities=set()
         for source in rows:
             item=str(source.get(item_field) or "").strip().upper();qty=self._number(source.get(quantity_field))
             if not item.startswith("P") or qty is None:
                 invalid += 1;continue
-            row={"item_cd":item,"instruction_qty":qty}
+            job_no=str(source.get("job_no") or source.get("production_order_no") or source.get("pr_no") or "").strip()
+            job_seq=str(source.get("job_seq") or "").strip()
+            identity=(job_no,job_seq)
+            if job_no and identity in identities:
+                raise ValueError(f"하이드레이션 지시 고유키 중복: {job_no}/{job_seq}")
+            if job_no:identities.add(identity)
+            row={"item_cd":item,"item_name":source.get("gd_nm") or "","instruction_qty":qty,
+                 "job_seq":job_seq,"factory_code":source.get("fac_cd") or "",
+                 "process_code":source.get("gong_cd") or "","process_name":source.get("gong_nm") or ""}
             for target,aliases in {
-                "check_sheet_no":("check_sheet_no","sheet_no"),
-                "production_order_no":("production_order_no","pr_no"),
+                "check_sheet_no":("check_no","check_sheet_no","sheet_no"),
+                "production_order_no":("job_no","production_order_no","pr_no"),
                 "instruction_date":(str(cfg.get("date_field") or "instruction_date"),"instruction_date","pr_dt"),
                 "factory_name":("factory_name","factory_nm","fac_nm"),
+                "source_menu_path":("source_menu_path",),
+                "source_screen_name":("source_screen_name",),
+                "source_tab_name":("source_tab_name",),
+                "api_endpoint":("api_endpoint",),
+                "extracted_at":("extracted_at",),
             }.items():
                 row[target]=next((source.get(name) for name in aliases if source.get(name) not in (None,"")),"")
             normalized.append(row);quantities[item]+=qty
         if rows and not normalized:
             raise ValueError(f"하이드레이션 지시 API 필드 확인 필요: {item_field}, {quantity_field}")
         captured=datetime.now().isoformat(timespec="seconds")
-        snapshot={"status":"success","captured_at":captured,"endpoint":endpoint,"source_total_count":payload.get("total_count",len(rows)),
+        snapshot={"status":"success","captured_at":captured,"endpoint":endpoint,"query_params":params,"source_total_count":payload.get("total_count",len(rows)),
                   "row_count":len(normalized),"product_count":len(quantities),"total_qty":sum(quantities.values()),
                   "rows":normalized,"quantities":dict(quantities),"invalid_rows":invalid}
         tmp=self.current_path.with_suffix(".tmp");tmp.write_text(json.dumps(snapshot,ensure_ascii=False),encoding="utf-8");tmp.replace(self.current_path)
