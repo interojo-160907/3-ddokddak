@@ -25,9 +25,11 @@ from ui.message_dialog import ask_app_confirmation
 from ui.permission_dialog import show_permission_denied
 from ui.startup_splash import StartupSplash
 from services.windows_icon import apply_taskbar_icon
+from ui.table_clipboard import install_table_clipboard
 
 
 COLLECTOR_MODULES = {
+    "inventory_live_refresh": "collectors.inventory_live_refresh",
     "aps_update_monitor": "collectors.aps_update_monitor",
     "bom_snapshot_collector": "collectors.bom_snapshot_collector",
     "data_retention_cleanup": "collectors.data_retention_cleanup",
@@ -128,6 +130,7 @@ def main() -> int:
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
     app = QApplication(sys.argv)
+    app.table_clipboard_controller = install_table_clipboard(app)
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setApplicationDisplayName(APP_DISPLAY_NAME)
     app.setOrganizationName("Ddokddak")
@@ -186,6 +189,15 @@ def main() -> int:
     frame.moveCenter(screen.center())
     window.move(frame.topLeft())
     splash.finish(window)
+    if os.getenv('DDOKDDAK_INVENTORY_PREVIEW') == '1':
+        window.setWindowTitle(APP_DISPLAY_NAME + ' · 재고 현황 검토용')
+        window.showMaximized()
+        QTimer.singleShot(300, lambda: window.show_page('inventory'))
+        if os.getenv('DDOKDDAK_INVENTORY_REFRESH_ONCE') == '1':
+            QTimer.singleShot(1500, lambda: window._start_data_collection('live'))
+        capture = os.getenv('DDOKDDAK_INVENTORY_CAPTURE','')
+        if capture:
+            QTimer.singleShot(18_000, lambda: window.grab().save(capture))
     apply_taskbar_icon(window, ASSET_DIR / "ddokddak_app_icon.ico")
     QTimer.singleShot(250, lambda: apply_taskbar_icon(window, ASSET_DIR / "ddokddak_app_icon.ico"))
     return app.exec()

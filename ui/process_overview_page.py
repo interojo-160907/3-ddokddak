@@ -350,7 +350,7 @@ class DataTable(Card):
             self.row_selected.emit(None)
 
     def _emit_selected(self) -> None:
-        selected = self.table.selectionModel().selectedRows()
+        selected = self.table.selectionModel().selectedIndexes()
         if selected:
             self.row_selected.emit(self.model.rows[selected[0].row()])
 

@@ -26,6 +26,7 @@ a = Analysis(
         "collectors.process_status_collector",
         "collectors.production_performance_collector",
         "collectors.live_production_need_collector",
+        "collectors.inventory_live_refresh",
         "collectors.refresh_all",
     ],
     hookspath=[],
