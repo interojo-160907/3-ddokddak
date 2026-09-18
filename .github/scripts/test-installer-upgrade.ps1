@@ -2,10 +2,12 @@ param(
     [Parameter(Mandatory=$true)][string]$PriorInstaller,
     [Parameter(Mandatory=$true)][string]$Installer,
     [Parameter(Mandatory=$true)][string]$ExpectedVersion,
-    [string]$PriorVersion = '2.6.4'
+    [string]$PriorVersion = '2.6.4',
+    [switch]$RequireSigned
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Installer upgrade test runs only on a disposable GitHub runner.' }
+if ($RequireSigned) { & "$PSScriptRoot/verify-windows-signatures.ps1" -Path $Installer -RequireTimestamp }
 $testApp = Join-Path $env:RUNNER_TEMP ('Production3UpgradeTest-' + $PriorVersion)
 $registry = 'HKCU:\Software\Interojo\DdokddakProduction3'
 $testData = Join-Path $env:RUNNER_TEMP ('Production3ExistingData-' + $PriorVersion)
@@ -42,6 +44,15 @@ foreach ($directory in @('live-production-need\snapshot','bom\snapshot','process
     if (-not (Test-Path -LiteralPath (Join-Path $afterRoot $directory))) { throw "Missing data directory: $directory" }
 }
 if ((Get-Item -LiteralPath $oldExe).VersionInfo.ProductVersion -ne $ExpectedVersion) { throw 'Installed executable version mismatch.' }
+if ($RequireSigned) {
+    & "$PSScriptRoot/verify-windows-signatures.ps1" -Path $oldExe -RequireTimestamp
+    $uninstallers = @(Get-ChildItem -LiteralPath $testApp -Filter 'unins*.exe' -File)
+    if ($uninstallers.Count -eq 0) { throw 'Installed uninstaller missing.' }
+    foreach ($uninstaller in $uninstallers) {
+        & "$PSScriptRoot/verify-windows-signatures.ps1" -Path $uninstaller.FullName -RequireTimestamp
+    }
+    & "$PSScriptRoot/verify-windows-signatures.ps1" -Path (Join-Path $testApp '_internal')
+}
 $report = Join-Path $env:RUNNER_TEMP ('installed-upgrade-smoke-' + $PriorVersion + '.json')
 $env:QT_QPA_PLATFORM = 'offscreen'
 $smoke = Start-Process -FilePath $oldExe -ArgumentList '--package-smoke-test', ('"' + $report + '"') -WindowStyle Hidden -PassThru

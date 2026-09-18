@@ -18,11 +18,44 @@ jobs:
   release:
     if: github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+      ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+      ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Require trusted signing configuration
+        shell: pwsh
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          foreach ($name in @('AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','ARTIFACT_SIGNING_ENDPOINT','ARTIFACT_SIGNING_ACCOUNT','ARTIFACT_SIGNING_PROFILE')) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Signing configuration missing: $name. Release publication is blocked." }
+          }
+
+      - name: Sign in to Artifact Signing with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Prepare pinned signing tools
+        shell: pwsh
+        run: .github/scripts/prepare-artifact-signing.ps1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -56,6 +89,13 @@ jobs:
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean production3.spec
 
+      - name: Sign and verify executable payload
+        shell: pwsh
+        run: |
+          .github/scripts/test-signing-gate.ps1
+          .github/scripts/sign-windows.ps1 -Path 'dist/production3'
+          .github/scripts/verify-windows-signatures.ps1 -Path 'dist/production3'
+
       - name: Test packaged executable
         shell: pwsh
         run: |
@@ -77,8 +117,13 @@ jobs:
           if (-not (Test-Path -LiteralPath $iscc)) {
             choco install innosetup -y --no-progress
           }
-          & $iscc "installer\production3.iss"
+          $shellPath = (Get-Command pwsh).Source
+          $signScript = (Resolve-Path '.github/scripts/sign-windows.ps1').Path
+          $signCommand = '$q' + $shellPath + '$q -NoProfile -NonInteractive -File $q' + $signScript + '$q -Path $f'
+          & $iscc (('/Sddokddak=' + $signCommand)) "installer\production3.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = Get-Item 'installer/output/ddokddak-production3-setup-*.exe'
+          .github/scripts/verify-windows-signatures.ps1 -Path $setup.FullName -RequireTimestamp
 
       - name: Verify direct upgrades from all published versions
         shell: pwsh
@@ -100,7 +145,7 @@ jobs:
             $priorDir = Join-Path $env:RUNNER_TEMP ('production3-prior-' + $prior.tagName)
             gh release download $prior.tagName --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $priorDir
             if ($LASTEXITCODE -ne 0) { throw "Cannot fetch legacy installer: $($prior.tagName)" }
-            & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version -PriorVersion $prior.tagName.TrimStart('v')
+            & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version -PriorVersion $prior.tagName.TrimStart('v') -RequireSigned
           }
 
       - name: Prepare release assets
@@ -112,6 +157,7 @@ jobs:
           if ($null -eq $versioned) { throw "Installer output was not created." }
           $asset = "installer\output\ddokddak-production3-setup.exe"
           Copy-Item -LiteralPath $versioned.FullName -Destination $asset -Force
+          .github/scripts/verify-windows-signatures.ps1 -Path $asset -RequireTimestamp
           $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ddokddak-production3-setup.exe" |
             Set-Content "installer\output\ddokddak-production3-setup.exe.sha256" -Encoding ascii
@@ -124,6 +170,7 @@ jobs:
         run: |
           $asset = "installer\output\ddokddak-production3-setup.exe"
           $hash = "$asset.sha256"
+          .github/scripts/verify-windows-signatures.ps1 -Path $asset -RequireTimestamp
           gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG_NAME $asset $hash --clobber --repo $env:GITHUB_REPOSITORY

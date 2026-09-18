@@ -30,10 +30,15 @@ def verify():
             before = before.replace(b'APP_VERSION = "2.6.4"', f'APP_VERSION = "{VERSION}"'.encode())
         elif name == "installer/production3.iss":
             before = before.replace(b'MyAppVersion "2.6.4"', f'MyAppVersion "{VERSION}"'.encode())
+            # Packaging-only addition: also sign Inno's temporary self-copies.
+            before = before.replace(
+                b"VersionInfoVersion={#MyAppVersion}\n",
+                b"VersionInfoVersion={#MyAppVersion}\nSignTool=ddokddak\nSignedUninstaller=yes\n",
+            )
         elif name == "installer/version_info.txt":
             before = before.replace(b"2.6.4", VERSION.encode()).replace(b"(2, 6, 4, 0)", b"(2, 7, 10, 0)")
         assert after == before, f"Unexpected functional change from {BASE}: {name}"
-    print(f"PASS: {len(expected - qa_only)} application/installer files match {BASE}; only release version is {VERSION}.")
+    print(f"PASS: {len(expected - qa_only)} application/installer files match {BASE}; only release version {VERSION} and installer signing directives differ.")
 
 
 if __name__ == "__main__":

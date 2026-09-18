@@ -39,6 +39,8 @@ VersionInfoDescription=생산3팀 전용 똑딱이 설치 프로그램
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}
+SignTool=ddokddak
+SignedUninstaller=yes
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
