@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "2.7.10"
+#define MyAppVersion "2.8.1"
 #define MyAppExeName "gui_app_pyside6.exe"
 #define MySourceDir "..\dist\production3"
 
@@ -39,8 +39,10 @@ VersionInfoDescription=생산3팀 전용 똑딱이 설치 프로그램
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}
+#ifdef SignedBuild
 SignTool=ddokddak
 SignedUninstaller=yes
+#endif
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"

@@ -8,14 +8,14 @@ import time
 from pathlib import Path
 
 import requests
+from services.api_credentials import api_headers
 
 
 BASE_URL = os.getenv("DDOKDDAK_PROD3_API_BASE_URL", "https://plan.interojo.net").rstrip("/")
 
 
 def _headers() -> dict[str, str]:
-    api_key = os.getenv("DDOKDDAK_PROD3_API_KEY", "").strip()
-    return {"X-API-Key": api_key} if api_key else {}
+    return api_headers()
 
 
 def _probe(path: str, params: dict[str, object], timeout: float) -> dict:
@@ -23,7 +23,7 @@ def _probe(path: str, params: dict[str, object], timeout: float) -> dict:
     result = {"endpoint": path, "checked_at": datetime.now().astimezone().isoformat()}
     try:
         with requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(),
-                          timeout=(5, timeout)) as response:
+                          timeout=(5, timeout), allow_redirects=False) as response:
             code = response.status_code
             result.update(status="success" if 200 <= code < 300 else
                           "delayed" if code in {408, 429, 500, 502, 503, 504} else "error",
@@ -36,7 +36,7 @@ def _probe(path: str, params: dict[str, object], timeout: float) -> dict:
     return result
 
 
-def check_collection_api_details(timeout: float = 30.0) -> dict[str, dict]:
+def check_collection_api_details(timeout: float = 8.0) -> dict[str, dict]:
     today = date.today().isoformat()
     probes = {
         "bom": ("/api/product-names", {"limit": 1}),
@@ -51,7 +51,7 @@ def check_collection_api_details(timeout: float = 30.0) -> dict[str, dict]:
         ),
     }
     results = {}
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="api-health") as executor:
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="api-health") as executor:
         futures = {
             executor.submit(_probe, path, params, timeout): key
             for key, (path, params) in probes.items()
@@ -65,7 +65,7 @@ def check_collection_api_details(timeout: float = 30.0) -> dict[str, dict]:
     return results
 
 
-def check_collection_apis(timeout: float = 30.0) -> dict[str, bool]:
+def check_collection_apis(timeout: float = 8.0) -> dict[str, bool]:
     return {key: value["status"] == "success"
             for key, value in check_collection_api_details(timeout).items()}
 

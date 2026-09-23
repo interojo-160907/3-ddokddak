@@ -58,7 +58,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
         self.live_refresh_button.setFixedHeight(30)
         self.live_refresh_button.setMinimumWidth(90)
         self.live_refresh_button.setToolTip(
-            "현재 5개 공정창고와 완료 생산실적을 다시 수집해 계산합니다."
+            "현재 WIP·완료 생산실적·공정 재고와 수화 지시를 같은 회차로 다시 수집해 계산합니다."
         )
         self.live_refresh_button.clicked.connect(self._request_refresh)
         self.live_refresh_button.setVisible(fixed_process is None)
@@ -97,9 +97,10 @@ class LiveProductionNeedPage(ProcessOverviewPage):
     def set_refreshing(self, refreshing: bool) -> None:
         self._refreshing = refreshing
         self.live_refresh_button.setEnabled(not refreshing)
-        self.live_refresh_button.setText("계산 중…" if refreshing else "지금 갱신")
+        self.live_refresh_button.setText("수집 중…" if refreshing else "지금 갱신")
+        if not refreshing:self._show_cycle_status()
         if refreshing:
-            self.calculation_status.setText("새 APS 기준 WIP·재고·실적 수집 중")
+            self.calculation_status.setText("새 APS 기준 WIP·재고·실적·수화 지시 수집 중")
             self.calculation_status.setProperty("status", "warning")
             self.calculation_status.setToolTip(
                 "최신 APS 회차와 연결되는 WIP를 확인한 뒤 재고·완료실적을 수집해 계산합니다."
@@ -116,6 +117,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
             self._show_cycle_status()
 
     def _show_cycle_status(self) -> None:
+        if getattr(self,'_refreshing',False):return
         status = self.service.status()
         aps_time = _display_time(status.get("aps_source_refreshed_at"))
         calculated = _display_time(status.get("refreshed_at"))
@@ -152,7 +154,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
             target.setToolTip(
                 "지금 갱신을 누르면 현재 APS 회차를 기준으로 계산을 시작합니다."
             )
-        target.setVisible(self.fixed_process is None)
+        target.setVisible(self.fixed_process is None and getattr(self,'_external_header_visible',True))
         _repolish(target)
 
     def _update_kpis(self, rows: list[dict]) -> None:

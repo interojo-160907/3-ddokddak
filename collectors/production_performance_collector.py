@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import closing
 
 import argparse
 import gzip
@@ -10,16 +11,16 @@ import sqlite3
 import sys
 import time
 from calendar import monthrange
-from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-import requests
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
+from services.erp_api_client import request_json
+from services.collection_parallel import bounded_map
 from services.data_location import resolve_data_root
 
 DATA_DIR = Path(
@@ -115,23 +116,10 @@ def _simple_day_chunks(start: date, end: date) -> list[tuple[date, date]]:
 
 
 def _fetch_once(start: date, end: date, api_key: str, timeout: int) -> dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    response = requests.get(
-        f"{BASE_URL}/api/production-performance",
-        params={
-            "date_from": start.isoformat(),
-            "date_to": end.isoformat(),
-            "limit": 0,
-            "prompt_context": "똑딱이 생산3팀 당월·전월 생산실적 수집",
-        },
-        headers=headers,
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    response.encoding = "utf-8"
-    payload = response.json()
+    payload = request_json("/api/production-performance", {
+        "date_from": start.isoformat(), "date_to": end.isoformat(),
+        "limit": 0, "prompt_context": "똑딱이 생산3팀 당월·전월 생산실적 수집",
+    }, api_key=api_key, timeout=min(timeout, 45))
     if payload.get("truncated") or (
         payload.get("total_count") is not None
         and int(payload["total_count"]) != len(payload.get("rows") or [])
@@ -160,8 +148,7 @@ def _fetch_complete_range(start: date, end: date, api_key: str, timeout: int) ->
         if "일부만 반환" not in str(exc) or start == end:
             raise
     chunks = _simple_day_chunks(start, end)
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        return list(pool.map(lambda chunk: _fetch(chunk[0], chunk[1], api_key, timeout), chunks))
+    return bounded_map(lambda chunk: _fetch(chunk[0], chunk[1], api_key, timeout), chunks)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -253,8 +240,7 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
             for payload in _fetch_complete_range(chunk_start, chunk_end, api_key, timeout)
         ]
     else:
-        with ThreadPoolExecutor(max_workers=3) as pool:
-            payloads = list(pool.map(lambda chunk: _fetch(chunk[0], chunk[1], api_key, timeout), chunks))
+        payloads = bounded_map(lambda chunk: _fetch(chunk[0], chunk[1], api_key, timeout), chunks)
     source_rows = [row for payload in payloads for row in list(payload.get("rows") or [])]
     rows = [
         row for row in source_rows
@@ -333,7 +319,7 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
             connection.close()
     _prune(BACKUP_DIR, "production_performance_before_*.sqlite", 10)
     _prune(RAW_DIR, "production_*.json.gz", 14)
-    with sqlite3.connect(DB_PATH) as verify_connection:
+    with closing(sqlite3.connect(DB_PATH)) as verify_connection:
         stored_rows = int(verify_connection.execute("SELECT COUNT(*) FROM production_performance").fetchone()[0])
     result = {
         "status": "success", "database": str(DB_PATH), "date_from": history_start.isoformat(),
@@ -360,7 +346,7 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="생산3팀 당월·전월 생산실적 스냅샷 수집")
-    parser.add_argument("--api-key", default=os.getenv("PLAN_API_KEY", ""))
+    parser.add_argument("--api-key", default="")
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--full", action="store_true", help="기존 DB가 있어도 전월~당일 전체 재수집")
     args = parser.parse_args()

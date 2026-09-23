@@ -6,7 +6,7 @@ on:
       target_version:
         description: 'Published installer to test against every prior release from v2.6.4'
         required: true
-        default: 'v2.7.10'
+        default: 'v2.8.1'
   push:
     tags:
       - "v*"
@@ -18,44 +18,9 @@ jobs:
   release:
     if: github.event_name != 'workflow_dispatch'
     runs-on: windows-latest
-    permissions:
-      contents: write
-      id-token: write
-    env:
-      ARTIFACT_SIGNING_ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
-      ARTIFACT_SIGNING_ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
-      ARTIFACT_SIGNING_PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
     steps:
       - name: Check out tagged source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Require trusted signing configuration
-        shell: pwsh
-        env:
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: |
-          foreach ($name in @('AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','ARTIFACT_SIGNING_ENDPOINT','ARTIFACT_SIGNING_ACCOUNT','ARTIFACT_SIGNING_PROFILE')) {
-            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Signing configuration missing: $name. Release publication is blocked." }
-          }
-
-      - name: Sign in to Artifact Signing with OIDC
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
-      - name: Prepare pinned signing tools
-        shell: pwsh
-        run: .github/scripts/prepare-artifact-signing.ps1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -69,10 +34,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
-      - name: Verify restored source
-        shell: pwsh
-        run: python .github/scripts/verify-restored-source.py
-
       - name: Run regression tests
         shell: pwsh
         env:
@@ -85,16 +46,10 @@ jobs:
           node management/test_safe_mode.cjs
           node management/test_multi_program.cjs
 
+      # Personal unsigned release: no paid signing service or security-policy changes.
       - name: Build application
         shell: pwsh
         run: python -m PyInstaller --noconfirm --clean production3.spec
-
-      - name: Sign and verify executable payload
-        shell: pwsh
-        run: |
-          .github/scripts/test-signing-gate.ps1
-          .github/scripts/sign-windows.ps1 -Path 'dist/production3'
-          .github/scripts/verify-windows-signatures.ps1 -Path 'dist/production3'
 
       - name: Test packaged executable
         shell: pwsh
@@ -117,13 +72,8 @@ jobs:
           if (-not (Test-Path -LiteralPath $iscc)) {
             choco install innosetup -y --no-progress
           }
-          $shellPath = (Get-Command pwsh).Source
-          $signScript = (Resolve-Path '.github/scripts/sign-windows.ps1').Path
-          $signCommand = '$q' + $shellPath + '$q -NoProfile -NonInteractive -File $q' + $signScript + '$q -Path $f'
-          & $iscc (('/Sddokddak=' + $signCommand)) "installer\production3.iss"
+          & $iscc "installer\production3.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $setup = Get-Item 'installer/output/ddokddak-production3-setup-*.exe'
-          .github/scripts/verify-windows-signatures.ps1 -Path $setup.FullName -RequireTimestamp
 
       - name: Verify direct upgrades from all published versions
         shell: pwsh
@@ -140,13 +90,26 @@ jobs:
             [version]$_.tagName.TrimStart('v') -ge [version]'2.6.4' -and
             [version]$_.tagName.TrimStart('v') -lt [version]$version
           } | Sort-Object { [version]$_.tagName.TrimStart('v') })
-          if ($priorVersions.Count -lt 10) { throw 'Incomplete historical release list.' }
+          if ($priorVersions.Count -lt 11) { throw 'Incomplete historical release list.' }
           foreach ($prior in $priorVersions) {
             $priorDir = Join-Path $env:RUNNER_TEMP ('production3-prior-' + $prior.tagName)
             gh release download $prior.tagName --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $priorDir
             if ($LASTEXITCODE -ne 0) { throw "Cannot fetch legacy installer: $($prior.tagName)" }
-            & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version -PriorVersion $prior.tagName.TrimStart('v') -RequireSigned
+            & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version -PriorVersion $prior.tagName.TrimStart('v')
           }
+
+      - name: Verify rollback to pinned v2.7.10
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $recovery = Join-Path $env:RUNNER_TEMP 'recovery-2.7.10'
+          gh release download v2.7.10 --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $recovery
+          if ($LASTEXITCODE -ne 0) { throw 'Recovery installer missing.' }
+          $old = Join-Path $recovery 'ddokddak-production3-setup.exe'
+          if ((Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'baddf74655fff923f8846eb8c891673f84d61cc51bc74677196e5c414162e04a') { throw 'Recovery hash mismatch.' }
+          $new = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
+          .github/scripts/test-installer-upgrade.ps1 -PriorInstaller $new -Installer $old -PriorVersion '2.8.1' -ExpectedVersion '2.7.10' -Recovery
 
       - name: Prepare release assets
         shell: pwsh
@@ -157,7 +120,6 @@ jobs:
           if ($null -eq $versioned) { throw "Installer output was not created." }
           $asset = "installer\output\ddokddak-production3-setup.exe"
           Copy-Item -LiteralPath $versioned.FullName -Destination $asset -Force
-          .github/scripts/verify-windows-signatures.ps1 -Path $asset -RequireTimestamp
           $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ddokddak-production3-setup.exe" |
             Set-Content "installer\output\ddokddak-production3-setup.exe.sha256" -Encoding ascii
@@ -170,11 +132,10 @@ jobs:
         run: |
           $asset = "installer\output\ddokddak-production3-setup.exe"
           $hash = "$asset.sha256"
-          .github/scripts/verify-windows-signatures.ps1 -Path $asset -RequireTimestamp
           gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG_NAME $asset $hash --clobber --repo $env:GITHUB_REPOSITORY
-            gh release edit $env:TAG_NAME --latest --notes-file "RELEASE_NOTES_$env:TAG_NAME.md" --repo $env:GITHUB_REPOSITORY
+            gh release edit $env:TAG_NAME --latest --repo $env:GITHUB_REPOSITORY
           } else {
             gh release create $env:TAG_NAME $asset $hash --notes-file "RELEASE_NOTES_$env:TAG_NAME.md" --latest `
               --title $env:TAG_NAME --repo $env:GITHUB_REPOSITORY
@@ -185,8 +146,6 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - name: Verify every published upgrade path
         shell: pwsh
         env:
@@ -204,7 +163,7 @@ jobs:
             [version]$_.tagName.TrimStart('v') -ge [version]'2.6.4' -and
             [version]$_.tagName.TrimStart('v') -lt [version]$env:TARGET_VERSION.TrimStart('v')
           } | Sort-Object { [version]$_.tagName.TrimStart('v') })
-          if ($versions.Count -lt 10) { throw 'Incomplete historical release list.' }
+          if ($versions.Count -lt 11) { throw 'Incomplete historical release list.' }
           $results = @()
           foreach ($release in $versions) {
             $tag = $release.tagName

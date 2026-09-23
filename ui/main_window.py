@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import json
@@ -62,6 +63,19 @@ from PySide6.QtWidgets import (
 from config import APP_DISPLAY_NAME, APP_NAME, APP_VERSION, ASSET_DIR, DATA_CENTER_DIR, DEFAULT_FACTORY, LEAD_SHEET_PDF_BACKUP_DIR, ROOT_DIR
 from services.collection_health import recovered, collection_ready, header_status
 
+INVENTORY_STATUS_DATA_DIR = Path(
+    os.getenv("DDOKDDAK_INVENTORY_STATUS_DATA_DIR", str(DATA_CENTER_DIR / "inventory-status"))
+)
+
+
+def _version_bootstrap_ready(full_report: dict) -> bool:
+    """A base pass is complete even when one live warehouse needs retry."""
+    results = full_report.get("results") or {}
+    required = ("bom", "aps", "production")
+    return bool(full_report.get("completed_at")) and all(
+        (results.get(key) or {}).get("status") == "success" for key in required
+    ) and (results.get('live') or {}).get('status') in {'success', 'partial'}
+
 
 def _collector_executable() -> str:
     if getattr(sys, "frozen", False) or sys.platform != "win32":
@@ -109,6 +123,7 @@ from services.program_presence import PRESENCE_INTERVAL_MS, ProgramPresence
 from services.api_health import check_collection_api_details, record_health, connection_label
 from services import safe_mode
 from ui.bom_page import BomStatusPage
+from ui.inventory_master_page import InventoryStatusPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
 from ui.notice_ticker import NoticeTicker
 from ui.permission_dialog import show_permission_denied
@@ -157,6 +172,7 @@ PAGES = (
     PageDefinition("inspection", "검사·접착 공정", "검사·접착 공정의 생산계획과 최근 실적, 납기 위험을 확인합니다.", "공정 현황"),
     PageDefinition("leak", "누수·규격 공정", "누수·규격 공정의 생산계획과 최근 실적, 납기 위험을 확인합니다.", "공정 현황"),
     PageDefinition("bom", "BOM 현황", "판매코드부터 생산·분리·사출·하위자재까지 BOM 연결관계를 확인합니다.", "제품 구성정보"),
+    PageDefinition("inventory", "재고 현황", "부족제품의 전체 파워별 재고 및 생산 부족수량을 확인합니다.", "생산3팀 · 재고"),
     PageDefinition("settings", "설정 및 운영", "데이터 저장 위치와 갱신 상태, 프로그램 업데이트 정보를 관리합니다.", "프로그램 관리"),
 )
 
@@ -1307,7 +1323,7 @@ class MainWindow(QMainWindow):
         self.notice_check_timer.start()
         QTimer.singleShot(18_000, self._start_notice_check)
         self.api_health_timer = QTimer(self)
-        self.api_health_timer.setInterval(60_000)
+        self.api_health_timer.setInterval(300_000)
         self.api_health_timer.timeout.connect(self._start_api_health_check)
         self.api_health_timer.start()
         QTimer.singleShot(800, self._start_api_health_check)
@@ -1344,7 +1360,7 @@ class MainWindow(QMainWindow):
             if current:
                 import sqlite3
                 automatic = DATA_CENTER_DIR / "process-status" / "aps_process_status.sqlite"
-                with sqlite3.connect(f"file:{automatic.as_posix()}?mode=ro", uri=True) as con:
+                with closing(sqlite3.connect(f"file:{automatic.as_posix()}?mode=ro", uri=True)) as con:
                     if not con.execute("SELECT COUNT(*) FROM aps_plan").fetchone()[0]:
                         raise RuntimeError("자동모드 APS 데이터가 비어 있습니다. 안전모드를 유지합니다.")
                 aps = self._read_refresh_status(DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json")
@@ -1417,10 +1433,11 @@ class MainWindow(QMainWindow):
 
     def _current_data_db_signatures(self) -> dict[str, tuple[int, int] | None]:
         return {
+            "inventory": self._database_signature(INVENTORY_STATUS_DATA_DIR / 'refresh_status.json'),
             "bom": self._database_signature(DATA_CENTER_DIR / "bom" / "product_reference.sqlite"),
             "aps": self._database_signature(DATA_CENTER_DIR / "process-status" / "aps_process_status.sqlite"),
             "production": self._database_signature(DATA_CENTER_DIR / "production-performance" / "production_performance.sqlite"),
-            "live": self._database_signature(DATA_CENTER_DIR / "live-production-need" / "current_production_need.sqlite"),
+            "live": self._database_signature(Path(os.getenv('DDOKDDAK_PROD3_LIVE_NEED_DATA_DIR',str(DATA_CENTER_DIR / 'live-production-need'))) / "current_production_need.sqlite"),
         }
 
     def _current_data_status_signatures(self) -> dict[str, tuple[int, int] | None]:
@@ -1429,6 +1446,7 @@ class MainWindow(QMainWindow):
             "aps": self._database_signature(DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json"),
             "production": self._database_signature(DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
             "live": self._database_signature(DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json"),
+            "inventory": self._database_signature(INVENTORY_STATUS_DATA_DIR / "refresh_status.json"),
         }
 
     def _check_data_snapshot_changes(self) -> None:
@@ -1450,11 +1468,13 @@ class MainWindow(QMainWindow):
             if hasattr(self, "live_need_page"):
                 self.live_need_page._show_cycle_status()
             if hasattr(self, "lot_work_order_page"):
-                self.lot_work_order_page.refresh_calculation_status()
+                self.lot_work_order_page.reload_data()
             self._refresh_settings_data_status()
             self._refresh_header_status()
 
     def _reload_changed_data_views(self, changed: set[str]) -> None:
+        if 'inventory' in changed and 'live' not in changed and hasattr(self, 'inventory_page'):
+            self.inventory_page.reload_data()
         self.dashboard_data = self.dashboard_service.load()
         self._close_order_detail()
         self._refresh_risk_alerts()
@@ -1475,10 +1495,12 @@ class MainWindow(QMainWindow):
                 page.load_normalized_rows(self.process_overview_page.all_rows)
         if "live" in changed and hasattr(self, "live_need_page"):
             self.live_need_page.reload_data()
+            if hasattr(self, 'inventory_page'):
+                self.inventory_page.reload_data()
             for page in getattr(self, "live_fixed_process_pages", {}).values():
                 page.reload_data()
             if hasattr(self, "lot_work_order_page"):
-                self.lot_work_order_page.refresh_calculation_status()
+                self.lot_work_order_page.reload_data()
             for page in getattr(self, "lot_fixed_process_pages", {}).values():
                 page.reload_data()
         elif "production" in changed:
@@ -1538,7 +1560,7 @@ class MainWindow(QMainWindow):
             self.data_status.setToolTip("APS 자동 확인 결과를 읽지 못했습니다.")
             return
         self.data_status.setToolTip(
-            "APS 원천 갱신을 1분마다 확인합니다. 변경 시 S관 데이터를 자동 수집합니다."
+            "APS 원천 갱신을 1분마다 확인합니다. 변경 시 전체 원천과 통합 계산을 자동 갱신합니다."
         )
         if not result.get("changed"):
             return
@@ -1547,7 +1569,7 @@ class MainWindow(QMainWindow):
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views({"aps"})
         self.show_page(self._active_nav_key)
-        QTimer.singleShot(250, lambda: self._start_data_collection("live", scheduled=True))
+        QTimer.singleShot(250, lambda: self._start_data_collection("all", scheduled=True))
 
     def _build_shell(self) -> None:
         central = QWidget()
@@ -1665,8 +1687,15 @@ class MainWindow(QMainWindow):
         self._set_lot_process_expanded(False)
 
         self._add_nav(menu_layout, "bom", "BOM 현황", "fa6s.diagram-project")
+        self._add_nav(menu_layout, "inventory", "재고 현황", "fa6s.boxes-stacked")
         menu_layout.addStretch()
 
+        settings_separator = QFrame()
+        settings_separator.setObjectName("SidebarSectionSeparator")
+        settings_separator.setFrameShape(QFrame.HLine)
+        settings_separator.setFixedHeight(1)
+        settings_separator.setStyleSheet("background:#E2E7ED;border:none;margin:0 12px;")
+        side_layout.addWidget(settings_separator)
         self._add_nav(side_layout, "settings", "설정 및 운영", "fa6s.gear")
         self.sidebar_status = QLabel(
             "<span style='color:#61758D; font-size:11px;'>사용 버전</span> "
@@ -1733,6 +1762,7 @@ class MainWindow(QMainWindow):
         self.data_status = QPushButton("●  데이터 연결 전")
         self.data_status.setObjectName("DataStatusChip")
         self.data_status.setFocusPolicy(Qt.NoFocus)
+        self.data_status.setFixedHeight(34)
         self.data_status.clicked.connect(self._open_collection_status)
         header_top_row.addWidget(self.data_status, 0, Qt.AlignTop)
         self.global_refresh_button = QPushButton("새로고침")
@@ -1785,6 +1815,12 @@ class MainWindow(QMainWindow):
             self.lot_fixed_process_pages[key] = page
             self._add_page(key, page)
         self._add_page("bom", self._build_bom_page())
+        self.inventory_page = InventoryStatusPage(self._inventory_main_filters)
+        self.live_header_row_layout.addWidget(self.inventory_page.calculation_status)
+        self.live_header_row_layout.addWidget(self.inventory_page.live_refresh_button)
+        self.inventory_page.refresh_requested.connect(lambda: self._start_data_collection('live'))
+        self.inventory_page.process_requested.connect(self.show_page)
+        self._add_page("inventory", self.inventory_page)
         self._add_page("settings", self._build_settings_page())
 
         root.addWidget(sidebar)
@@ -2009,6 +2045,8 @@ class MainWindow(QMainWindow):
         self.page_indexes[key] = self.stack.addWidget(page)
 
     def show_page(self, key: str) -> None:
+        if getattr(self, '_current_page', '') in ('process_overview', 'live_need'):
+            self._inventory_filter_source = self._current_page
         if safe_mode.active() and (key in {"live_need", "lot_work_order"} or key in self.LIVE_PROCESS_NAV or key in self.LOT_PROCESS_NAV):
             key = "process_overview"
         requested_key = key
@@ -2037,7 +2075,7 @@ class MainWindow(QMainWindow):
             or actual_key == "lot_work_order"
             or actual_key in self.LOT_PROCESS_NAV
         )
-        live_header = actual_key == "live_need" or actual_key in self.LIVE_PROCESS_NAV
+        live_header = actual_key in {"live_need", "inventory"} or actual_key in self.LIVE_PROCESS_NAV
         lot_header = actual_key == "lot_work_order" or actual_key in self.LOT_PROCESS_NAV
         page_owns_header = actual_key == "dashboard"
         self.header_kicker.setVisible(False)
@@ -2046,6 +2084,11 @@ class MainWindow(QMainWindow):
         self.header_meta.setVisible(True)
         self.data_status.setVisible(True)
         self.live_header_row.setVisible(live_header)
+        for page, visible in ((self.live_need_page, live_header and actual_key != 'inventory'),
+                              (self.inventory_page, actual_key == 'inventory')):
+            page._external_header_visible = visible
+            page.calculation_status.setVisible(visible)
+            page.live_refresh_button.setVisible(visible)
         self.lot_header_row.setVisible(lot_header)
         self.global_header.setFixedHeight(70 if live_header or lot_header else 36)
         if lot_header and hasattr(self, "lot_work_order_page"):
@@ -2070,6 +2113,19 @@ class MainWindow(QMainWindow):
             button.set_active(page_key == requested_key)
         self._refresh_header_status()
 
+        if actual_key == 'inventory':
+            QTimer.singleShot(0, self.inventory_page.inherit_filters)
+
+    def _inventory_main_filters(self) -> dict:
+        source = self.live_need_page if getattr(self, '_inventory_filter_source', '') == 'live_need' else self.process_overview_page
+        detail = source.detail_page
+        limit = detail._due_limit()
+        process = {'사출':'10','분리':'20','하이드레이션':'45','접착':'55','누수규격':'80'}.get(detail._selected_process(),'전체')
+        return {'markets':[str(b.property('market')) for b in source.market_buttons if b.isChecked()],
+                'search':source.search.text(), 'detail_search':detail.search.text(),
+                'due':limit.isoformat() if limit else None,
+                'classes':list(detail._selected_classifications()), 'process':process}
+
     def _refresh_header_status(self) -> None:
         aps_fresh = self.dashboard_data.get("aps_status", {}).get("source_refreshed_at") or "-"
         if (
@@ -2089,6 +2145,21 @@ class MainWindow(QMainWindow):
             self.dashboard_data, self._read_collection_errors(),
             getattr(self, "_api_health_details", {}),
         )
+        hydration_snapshot = MainWindow._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
+        )
+        inventory_cycle = MainWindow._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
+        )
+        inventory_bootstrap_pending = (
+            hydration_snapshot.get("status") != "success"
+            or inventory_cycle.get("status") != "success"
+        )
+        if api_collection_ready and inventory_bootstrap_pending:
+            status_text = ('일부 수집 대기 · 기존 데이터 사용' if inventory_cycle.get('status') in {'partial','cancelled'}
+                           else '수집 준비 중 · 재고·수화 최초 갱신 대기')
+            status_tip = "업데이트 후 최초 통합 갱신을 자동으로 시작합니다. 완료 전에는 마지막 정상 데이터를 유지합니다."
+            api_collection_ready = False
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText("●  " + status_text)
         self.data_status.setToolTip(status_tip)
@@ -2096,22 +2167,43 @@ class MainWindow(QMainWindow):
             self.data_status.setCursor(Qt.ArrowCursor)
             self.data_status.setStyleSheet(
                 "QPushButton { background:#ECFDF5; color:#087F5B; border:1px solid #9CE2C5; "
-                "border-radius:10px; padding:7px 14px; font-weight:700; }"
+                "border-radius:8px; padding:0 12px; font-size:11px; font-weight:700; }"
             )
         else:
             self.data_status.setCursor(Qt.PointingHandCursor)
             self.data_status.setStyleSheet(
                 "QPushButton { background:#FFF7ED; color:#B45309; border:1px solid #FDBA74; "
-                "border-radius:10px; padding:7px 14px; font-weight:800; }"
+                "border-radius:8px; padding:0 12px; font-size:11px; font-weight:800; }"
                 "QPushButton:hover { background:#FFEDD5; border-color:#F97316; }"
                 "QPushButton:pressed { background:#FED7AA; }"
             )
         if status_text.startswith("수집 정상") and "확인 필요" not in status_text:
             self.data_status.setStyleSheet(
                 "QPushButton { background:#EFF6FF; color:#2563EB; border:1px solid #BFDBFE; "
-                "border-radius:10px; padding:7px 14px; font-weight:700; }")
+                "border-radius:8px; padding:0 12px; font-size:11px; font-weight:700; }")
         self.data_status.style().unpolish(self.data_status)
         self.data_status.style().polish(self.data_status)
+        if getattr(self,'_collection_busy',False):
+            self.data_status.setText('● 수집 중 · 기존 데이터 사용')
+            self.data_status.setProperty('state','waiting')
+        elif hasattr(self, 'inventory_page') and self._current_page in {'inventory','live_need','lot_work_order'}:
+            state = self.inventory_page.inventory_service.cache / 'refresh_status.json'
+            if state.exists():
+                try:
+                    report = json.loads(state.read_text(encoding='utf-8'))
+                    hydration = report.get('hydration', {})
+                    connected = hydration.get('status') == 'success'
+                    self.data_status.setText(
+                        f"● {'수집 정상' if report.get('status') == 'success' else '부분 갱신'} · "
+                        + (f"수화 지시 {hydration.get('rows', 0):,}건" if connected and report.get('status') == 'success' else '미완료 항목 재시도 대기')
+                    )
+                    self.data_status.setToolTip(json.dumps(report,ensure_ascii=False,indent=2))
+                    self.data_status.setStyleSheet(
+                        'QPushButton {background:#EAF3FF;color:#0877F9;border:1px solid #B9D7FF;border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;}'
+                        if report.get('status') == 'success' else
+                        'QPushButton {background:#FFF6DD;color:#805200;border:1px solid #DFC994;border-radius:8px;padding:0 12px;font-size:11px;font-weight:700;}'
+                    )
+                except (OSError,ValueError):pass
 
     def _open_collection_status(self) -> None:
         if self.data_status.property("state") == "ready":
@@ -4761,6 +4853,10 @@ class MainWindow(QMainWindow):
         def download_latest_installer() -> None:
             QDesktopServices.openUrl(QUrl(DEFAULT_UPDATE_URL))
 
+        def open_recovery_release() -> None:
+            QDesktopServices.openUrl(QUrl(
+                "https://github.com/interojo-160907/3-ddokddak/releases/tag/v2.7.10"))
+
         cards = (
             (
                 "로컬 데이터 저장소",
@@ -4794,6 +4890,13 @@ class MainWindow(QMainWindow):
                 "업데이트 확인",
                 check_program_update,
             ),
+            (
+                "이전 버전 복구",
+                "2.7.10(2.6.4 기능)으로 복구할 수 있습니다. 관리시트 버전과 설치 주소를 먼저 2.7.10으로 되돌린 뒤 프로그램을 종료하고 복구 설치파일을 실행하세요.",
+                "기존 데이터 폴더 유지 · 2.7.10 고정 복구 페이지",
+                "복구 페이지 열기",
+                open_recovery_release,
+            ),
         )
         for index, (title, description, value, action, callback) in enumerate(cards):
             if index == 1:
@@ -4809,6 +4912,8 @@ class MainWindow(QMainWindow):
             title_label.setObjectName("CardTitle")
             desc_label = QLabel(description)
             desc_label.setObjectName("CardSub")
+            desc_label.setWordWrap(True)
+            desc_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             value_label = QLabel(value)
             value_label.setObjectName("SettingsValue")
             value_label.setWordWrap(True)
@@ -4837,6 +4942,8 @@ class MainWindow(QMainWindow):
         distribution_title.setObjectName("CardTitle")
         distribution_description = QLabel("신규 사용자에게 최신 설치파일 주소를 전달할 수 있습니다. 설치 후 등록되지 않은 PC는 사용 권한을 요청합니다.")
         distribution_description.setObjectName("CardSub")
+        distribution_description.setWordWrap(True)
+        distribution_description.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         distribution_value = QLabel(DEFAULT_UPDATE_URL)
         distribution_value.setObjectName("SettingsValue")
         distribution_value.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -4886,6 +4993,9 @@ class MainWindow(QMainWindow):
         self.settings_data_status = QLabel("상태 확인 중")
         self.settings_data_status.setObjectName("SettingsValue")
         self.settings_data_status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.settings_data_status.setWordWrap(True)
+        self.settings_data_status.setMinimumWidth(0)
+        self.settings_data_status.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         text_layout.addWidget(title)
         text_layout.addWidget(description)
         text_layout.addWidget(self.settings_data_status)
@@ -4923,7 +5033,8 @@ class MainWindow(QMainWindow):
             ("bom", "BOM", "제품명·BOM 전체 스냅샷", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
             ("aps", "S관 APS", "원천 변경 확인 후 S관만 갱신", (("중지", 0), ("1분 (기본)", 1), ("5분", 5), ("10분", 10), ("30분", 30), ("1시간", 60))),
             ("production", "생산실적", "07시 첫 전체 · 이후 최근 7일", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
-            ("live", "WIP·실시간 실적 반영", "5개 WIP 회차 감시·전체 수집·재고·완료실적 계산", (("수동만", 0), ("30분", 30), ("1시간 (기본)", 60), ("2시간", 120), ("3시간", 180))),
+            ("live", "WIP·실시간 실적 반영", "5개 WIP·생산실적·4개 표시 창고를 같은 회차로 계산", (("수동만", 0), ("30분", 30), ("1시간 (기본)", 60), ("2시간", 120), ("3시간", 180))),
+            ("hydration", "수화 지시", "4개 표시 창고·실시간 실적과 동시에 수집 후 부족량 계산", (("실시간 갱신과 함께", 0),)),
         )
         for row_index, (key, name, subtext, choices) in enumerate(definitions, start=1):
             name_box = QVBoxLayout()
@@ -4931,6 +5042,9 @@ class MainWindow(QMainWindow):
             name_label.setObjectName("CollectionName")
             sub_label = QLabel(subtext)
             sub_label.setObjectName("CollectionSub")
+            sub_label.setWordWrap(True)
+            sub_label.setMinimumWidth(0)
+            sub_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
             name_box.addWidget(name_label)
             name_box.addWidget(sub_label)
             grid.addLayout(name_box, row_index, 0)
@@ -4969,9 +5083,12 @@ class MainWindow(QMainWindow):
             schedule.currentIndexChanged.connect(
                 lambda _index, source=key, combo=schedule: self._collection_schedule_changed(source, combo)
             )
+            if key == "hydration":
+                schedule.setEnabled(False)
+                schedule.setToolTip("WIP·실시간 실적 반영과 동일한 회차로 고정됩니다.")
             manual = QPushButton("지금 갱신")
             manual.setObjectName("SecondaryButton")
-            manual.clicked.connect(lambda _checked=False, source=key: self._start_data_collection(source))
+            manual.clicked.connect(lambda _checked=False, source=("live" if key == "hydration" else key): self._start_data_collection(source))
             grid.addWidget(connection, row_index, 1)
             grid.addLayout(state_box, row_index, 2)
             grid.addWidget(refreshed, row_index, 3)
@@ -4984,8 +5101,9 @@ class MainWindow(QMainWindow):
                 "refreshed": refreshed, "rows": rows,
                 "schedule": schedule, "manual": manual,
             }
-        grid.setColumnStretch(0, 2)
-        grid.setColumnStretch(3, 1)
+        for column, stretch in enumerate((4, 1, 2, 2, 1, 2, 1)):
+            grid.setColumnMinimumWidth(column, 0)
+            grid.setColumnStretch(column, stretch)
         detail_layout.addLayout(grid)
 
         footer = QHBoxLayout()
@@ -5044,6 +5162,8 @@ class MainWindow(QMainWindow):
                 if not isinstance(info, dict):
                     continue
                 message = str(info.get("message") or "")
+                if '사용자가 진행 중인 데이터 수집을 중단' in message:
+                    continue
                 inferred = next(
                     (source for source, token in source_hints.items() if token in message),
                     "",
@@ -5164,13 +5284,14 @@ class MainWindow(QMainWindow):
             ("aps", "APS", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json", ("stored_rows",)),
             ("production", "생산실적", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json", ("stored_rows", "s_factory_rows")),
             ("live", "WIP·실시간 실적", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json", ("remaining_rows", "evidence_rows")),
+            ("hydration", "수화 지시", INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json", ("row_count", "product_count")),
         )
         parts = []
         collection_errors = self._read_collection_errors()
         for key, name, path, count_keys in definitions:
             status = self._read_refresh_status(path)
             counts = [int(status[key]) for key in count_keys if status.get(key) is not None]
-            local_refreshed = status.get("refreshed_at") or status.get("collected_at") or "-"
+            local_refreshed = status.get("refreshed_at") or status.get("collected_at") or status.get("captured_at") or "-"
             source_refreshed = status.get("source_refreshed_at") or ""
             refreshed = source_refreshed if key == "aps" and source_refreshed else local_refreshed
             count_text = "/".join(f"{count:,}" for count in counts)
@@ -5189,7 +5310,7 @@ class MainWindow(QMainWindow):
                     else "● WIP 새 회차 감시 중"
                     if waiting_wip
                     else
-                    "● 원천 0건 · 기존 유지"
+                    "● 갱신 보류 · 기존 유지"
                     if retained
                     else
                     "● 정상 · 변경 없음"
@@ -5202,6 +5323,8 @@ class MainWindow(QMainWindow):
                 if key == "live" and status_value == "success":
                     wip_clock = str(status.get("wip_source_refreshed_at") or "")[-8:-3]
                     state_text += f" · WIP {wip_clock}" if wip_clock else " · 계산 완료"
+                if key == "hydration":
+                    state_text = "● 정상 · 동시 수집" if status_value == "success" else "● API 미연결"
                 controls["state"].setText(state_text)
                 controls["state"].setProperty("state", "success" if success else "warning")
                 controls["state"].style().unpolish(controls["state"])
@@ -5230,6 +5353,11 @@ class MainWindow(QMainWindow):
                         f"WIP 마지막 확인 {status.get('wip_checked_at') or '-'}\n"
                         f"인정 완료 {float(status.get('recognized_qty') or 0):,.0f} pcs"
                     )
+                if key == "hydration":
+                    connected = status_value == "success"
+                    controls["connection"].setText("● 원활" if connected else "● 연결 대기")
+                    controls["connection"].setStyleSheet("color:#059669;font-weight:800;" if connected else "color:#d97706;font-weight:800;")
+                    controls["state"].setToolTip("수화 지시는 4개 표시 창고 재고와 동시에 수집되고, 모든 입력 완료 후 부족량을 계산합니다.")
         self.settings_data_status.setText("  |  ".join(parts))
 
     def _collection_schedule_changed(self, source: str, combo: QComboBox) -> None:
@@ -5248,6 +5376,7 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(2_000, self._run_scheduled_collections)
 
     def _start_api_health_check(self) -> None:
+        if getattr(self, '_collection_busy', False):return
         if self._api_health_future is not None and not self._api_health_future.done():
             return
         self._api_health_future = self._api_health_executor.submit(check_collection_api_details)
@@ -5294,7 +5423,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _status_refreshed_at(path: Path) -> datetime | None:
         status = MainWindow._read_refresh_status(path)
-        text = str(status.get("refreshed_at") or status.get("collected_at") or "")
+        text = str(status.get("refreshed_at") or status.get("collected_at") or status.get("captured_at") or "")
         try:
             value = datetime.fromisoformat(text)
             return value.replace(tzinfo=None) if value.tzinfo else value
@@ -5305,16 +5434,35 @@ class MainWindow(QMainWindow):
                 return None
 
     def _run_scheduled_collections(self) -> None:
+        if datetime.now() < getattr(self, '_collection_resume_at', datetime.min):return
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             return
         if hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
             return
         now = datetime.now()
+        bootstrap_path = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
+        bootstrap = self._read_refresh_status(bootstrap_path)
+        if str(bootstrap.get("completed_version") or "") != APP_VERSION:
+            attempted = self._collection_last_attempt.get("version_bootstrap")
+            if attempted is None or (now - attempted) >= timedelta(minutes=5):
+                self._collection_last_attempt["version_bootstrap"] = now
+                self._start_data_collection("all", scheduled=True)
+            return
         definitions = (
             ("bom", DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json"),
             ("aps", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json"),
             ("production", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
             ("live", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json"),
+        )
+        hydration_snapshot = self._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
+        )
+        inventory_cycle = self._read_refresh_status(
+            INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
+        )
+        inventory_bootstrap_due = (
+            hydration_snapshot.get("status") != "success"
+            or inventory_cycle.get("status") != "success"
         )
         due_sources: list[str] = []
         waiting_wip_due = False
@@ -5324,7 +5472,9 @@ class MainWindow(QMainWindow):
             waiting_wip = source == "live" and status_value == "waiting_wip"
             minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
             # APS 변경으로 시작된 WIP 감시는 정기 수집 설정과 별개로 완료까지 이어 간다.
-            if minutes <= 0 and not waiting_wip:
+            if minutes <= 0 and not waiting_wip and not (
+                source == "live" and inventory_bootstrap_due
+            ):
                 continue
             refreshed = self._status_refreshed_at(status_path)
             attempted = self._collection_last_attempt.get(source)
@@ -5340,6 +5490,7 @@ class MainWindow(QMainWindow):
             due = (
                 daily_full_due
                 or retained_retry_due
+                or (source == "live" and inventory_bootstrap_due)
                 or refreshed is None
                 or (now - refreshed) >= timedelta(minutes=minutes)
             )
@@ -5347,7 +5498,7 @@ class MainWindow(QMainWindow):
                 1
                 if source == "aps" or waiting_wip
                 else 5
-                if retained_retry_due
+                if retained_retry_due or (source == "live" and inventory_bootstrap_due)
                 else max(5, minutes)
             )
             retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
@@ -5358,7 +5509,7 @@ class MainWindow(QMainWindow):
             return
         # APS 원천 확인과 WIP 후속 감시가 동시에 도래해도 BOM·생산실적까지
         # 전체 수집하지 않고, 새 APS에 딸린 WIP 확인을 먼저 끝낸다.
-        if waiting_wip_due:
+        if waiting_wip_due or (inventory_bootstrap_due and 'live' in due_sources):
             self._collection_last_attempt["live"] = now
             self._start_data_collection("live", scheduled=True)
             return
@@ -5478,7 +5629,7 @@ class MainWindow(QMainWindow):
                 button.setEnabled(True)
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
-        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1":
+        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" and not (os.getenv('DDOKDDAK_INVENTORY_PREVIEW')=='1' and source=='live' and not scheduled):
             return  # The existing installed app remains the collector during parallel review.
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             if not scheduled:
@@ -5493,7 +5644,7 @@ class MainWindow(QMainWindow):
             "bom": "bom_snapshot_collector.py",
             "aps": "process_status_collector.py",
             "production": "production_performance_collector.py",
-            "live": "live_production_need_collector.py",
+            "live": "inventory_live_refresh.py",
         }
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         if source not in scripts:
@@ -5556,6 +5707,8 @@ class MainWindow(QMainWindow):
     def _data_collection_started(self, source: str) -> None:
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         self._collection_started_at = datetime.now()
+        for key in (('bom','aps','production','live') if source == 'all' else (source,)):
+            self._collection_last_attempt[key] = self._collection_started_at
         self._set_collection_busy(True, source)
         self.settings_data_status.setText(
             f"{labels.get(source, source)} 수집 중입니다. 프로그램을 종료하지 마세요."
@@ -5566,6 +5719,9 @@ class MainWindow(QMainWindow):
         )
 
     def _set_collection_busy(self, busy: bool, source: str = "") -> None:
+        self._collection_busy = busy
+        if hasattr(self, 'inventory_page'):
+            self.inventory_page.set_refreshing(busy and source in {'live','all'})
         if hasattr(self, "data_snapshot_timer"):
             if busy:
                 self.data_snapshot_timer.stop()
@@ -5579,7 +5735,8 @@ class MainWindow(QMainWindow):
             )
         for key, controls in getattr(self, "collection_controls", {}).items():
             controls["manual"].setEnabled(not busy)
-            controls["manual"].setText("수집 중…" if busy and key == source else "지금 갱신")
+            same_cycle = key == source or (key == "hydration" and source in {"live", "all"})
+            controls["manual"].setText("수집 중…" if busy and same_cycle else "지금 갱신")
         if hasattr(self, "live_need_page"):
             self.live_need_page.set_refreshing(busy and source in {"live", "all"})
         for page in getattr(self, "live_fixed_process_pages", {}).values():
@@ -5612,6 +5769,15 @@ class MainWindow(QMainWindow):
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         source = getattr(self, "_collection_active_source", "all")
         suffix = " · API 응답을 기다리는 중" if elapsed_seconds >= 30 else ""
+        report = self._read_refresh_status(INVENTORY_STATUS_DATA_DIR / 'refresh_status.json')
+        try:current = datetime.fromisoformat(report.get('started_at','')).replace(tzinfo=None) >= started - timedelta(seconds=2)
+        except ValueError:current = False
+        if current and source in {'all','live'} and report.get('status') == 'running':
+            outcomes = report.get('sources', {})
+            done = sum(v.get('status') == 'success' for v in outcomes.values())
+            suffix = f" · {report.get('phase','수집 중')} · 창고 {done}/{len(outcomes)} 완료"
+            for page in (getattr(self,'live_need_page',None), getattr(self,'inventory_page',None), getattr(self,'lot_work_order_page',None)):
+                if page is not None:page.calculation_status.setText(suffix.removeprefix(' · '))
         self.settings_data_status.setText(
             f"{labels.get(source, source)} 수집 중 · 경과 {minutes:02d}:{seconds:02d}{suffix}"
         )
@@ -5631,9 +5797,10 @@ class MainWindow(QMainWindow):
         process = getattr(self, "settings_collection_process", None)
         if process is None or process.state() == QProcess.NotRunning:
             return
-        self._abort_data_collection("사용자가 진행 중인 데이터 수집을 중단했습니다.")
+        self._collection_resume_at = datetime.now() + timedelta(minutes=5)
+        self._abort_data_collection("사용자가 진행 중인 데이터 수집을 중단했습니다.", cancelled=True)
 
-    def _abort_data_collection(self, message: str) -> None:
+    def _abort_data_collection(self, message: str, *, cancelled: bool = False) -> None:
         process = getattr(self, "settings_collection_process", None)
         if process is None or process.state() == QProcess.NotRunning:
             return
@@ -5648,12 +5815,12 @@ class MainWindow(QMainWindow):
         error = "\n\n".join(part for part in (message, captured, process.errorString()) if part)
         self._collection_forced_error_message = message
         self._collection_abort_finalized = True
-        self._record_collection_error(source, -2, error or message)
+        if not cancelled:self._record_collection_error(source, -2, error or message)
+        self._collection_cancelled = cancelled
         self._refresh_settings_data_status()
         self.settings_data_status.setText(
-            "수집 중단됨 · 상세 설정의 오류 확인 버튼에서 내용을 확인하거나 복사하세요."
+            "수집 중단 중 · 기존 데이터 유지" if cancelled else "수집 중단 중 · 상세 설정에서 오류 확인"
         )
-        self._set_collection_busy(False)
         process.kill()
         if sys.platform == "win32" and pid > 0:
             killer = _background_process(self)
@@ -5673,6 +5840,12 @@ class MainWindow(QMainWindow):
             self._collection_abort_finalized = False
             self._collection_forced_error_message = ""
             self._collection_live_output = []
+            report_path = INVENTORY_STATUS_DATA_DIR / 'refresh_status.json'
+            report = self._read_refresh_status(report_path)
+            if report.get('status') == 'running':
+                report.update(status='cancelled', phase='중단됨', completed_at=datetime.now().astimezone().isoformat(timespec='seconds'))
+                report_path.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+            self.settings_data_status.setText('수집 중단됨 · 기존 데이터 유지 · 5분 후 자동 수집 재개')
             return
         forced_error = str(getattr(self, "_collection_forced_error_message", "") or "").strip()
         captured = "\n".join(getattr(self, "_collection_live_output", []))
@@ -5708,7 +5881,7 @@ class MainWindow(QMainWindow):
                     self._reload_changed_data_views(changed)
                     QTimer.singleShot(1_000, self._run_scheduled_collections)
                     return
-        if exit_code != 0 or forced_error:
+        if (exit_code != 0 and not (exit_code == 2 and source in {'all','live'})) or forced_error:
             error_parts = [part for part in (forced_error, captured, self.settings_collection_process.errorString()) if part]
             error = "\n\n".join(error_parts) or "수집기가 종료됐지만 오류 내용을 반환하지 않았습니다."
             self._record_collection_error(source, exit_code, error)
@@ -5727,8 +5900,49 @@ class MainWindow(QMainWindow):
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
+        if source == "all":
+            full = self._read_refresh_status(
+                DATA_CENTER_DIR / "settings" / "full_refresh_status.json"
+            )
+            inventory = self._read_refresh_status(
+                INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
+            )
+            hydration = self._read_refresh_status(
+                INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
+            )
+            bootstrap_ok = _version_bootstrap_ready(full)
+            if bootstrap_ok:
+                target = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                temporary = target.with_suffix(".tmp")
+                temporary.write_text(
+                    json.dumps(
+                        {
+                            "completed_version": APP_VERSION,
+                            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "cycle_id": inventory.get("cycle_id", ""),
+                            "inventory_status": inventory.get("status", "missing"),
+                            "hydration_status": hydration.get("status", "missing"),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                temporary.replace(target)
+        if source == 'live' and hasattr(self, 'inventory_page'):
+            state = self.inventory_page.inventory_service.cache / 'refresh_status.json'
+            if state.exists():
+                report = json.loads(state.read_text(encoding='utf-8'))
+                failed = [k for k,v in report.get('sources',{}).items() if v.get('status') != 'success']
+                hydration = report.get('hydration', {})
+                hydration_label = (f"수화 지시 {hydration.get('rows', 0):,}건" if hydration.get('status') == 'success' else '수화 지시 미연결')
+                label = ('갱신 완료' if report.get('status') == 'success' else '부분 갱신') + ' · ' + hydration_label + (' · 창고 오류 ' + ', '.join(failed) if failed else ' · 재고 스냅샷 저장')
+                self.live_need_page.calculation_status.setText(label)
+                self.lot_work_order_page.calculation_status.setText(label)
+                self.settings_data_status.setText(label)
         if source == "aps":
-            QTimer.singleShot(250, lambda: self._start_data_collection("live", scheduled=True))
+            QTimer.singleShot(250, lambda: self._start_data_collection("all", scheduled=True))
         QTimer.singleShot(1_000, self._run_scheduled_collections)
 
     def _data_collection_process_error(self, source: str, process_error) -> None:

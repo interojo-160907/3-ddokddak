@@ -11,11 +11,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import requests
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
+from services.erp_api_client import request_json
 from services.data_location import resolve_data_root
 
 DATA_DIR = Path(
@@ -58,13 +58,8 @@ def _repair_legacy_cp949(value: Any) -> Any:
 
 
 def _request(endpoint: str, params: dict[str, Any], api_key: str, timeout: int) -> dict[str, Any]:
-    headers = {"Accept": "application/json"}
-    if api_key:
-        headers["X-API-Key"] = api_key
-    response = requests.get(f"{BASE_URL}{endpoint}", params=params, headers=headers, timeout=timeout)
-    response.raise_for_status()
-    response.encoding = "utf-8"
-    return _repair_legacy_cp949(response.json())
+    payload = request_json(endpoint, params, api_key=api_key, timeout=min(timeout, 60))
+    return _repair_legacy_cp949(payload)
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -279,7 +274,7 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="생산3팀 S관 세부 진행 현황 스냅샷 수집")
-    parser.add_argument("--api-key", default=os.getenv("PLAN_API_KEY", ""))
+    parser.add_argument("--api-key", default="")
     parser.add_argument("--timeout", type=int, default=300)
     args = parser.parse_args()
     print(json.dumps(refresh(args.api_key, args.timeout), ensure_ascii=False, indent=2))

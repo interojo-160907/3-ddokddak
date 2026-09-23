@@ -44,7 +44,7 @@ def check_and_refresh(api_key: str = "", timeout: int = 60) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="APS 원천 갱신 감시 및 S관 스냅샷 자동 교체")
-    parser.add_argument("--api-key", default=os.getenv("PLAN_API_KEY", ""))
+    parser.add_argument("--api-key", default="")
     parser.add_argument("--timeout", type=int, default=60)
     args = parser.parse_args()
     print(

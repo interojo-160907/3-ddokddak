@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Installer,
     [Parameter(Mandatory=$true)][string]$ExpectedVersion,
     [string]$PriorVersion = '2.6.4',
-    [switch]$RequireSigned
+    [switch]$RequireSigned,
+    [switch]$Recovery
 )
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Installer upgrade test runs only on a disposable GitHub runner.' }
@@ -59,9 +60,12 @@ $smoke = Start-Process -FilePath $oldExe -ArgumentList '--package-smoke-test', (
 if (-not $smoke.WaitForExit(60000)) { Stop-Process -Id $smoke.Id -Force; throw 'Installed executable simulation timed out.' }
 if ($smoke.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report)) { throw 'Installed executable simulation failed.' }
 $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
-if (-not $result.ok -or $result.app_version -ne $ExpectedVersion -or $result.restored_from -ne '2.6.4' -or $result.rollback_checks.Count -ne 6) { throw 'Incomplete installed recovery verification.' }
+if (-not $result.ok -or $result.app_version -ne $ExpectedVersion) { throw 'Installed version/smoke mismatch.' }
+if ($Recovery) {
+    if ($result.restored_from -ne '2.6.4' -or $result.rollback_checks.Count -ne 6) { throw 'Incomplete rollback verification.' }
+} elseif ($result.inventory_simulation.checks.Count -lt 13) { throw 'Inventory collection simulation incomplete.' }
 foreach ($path in $preserved.Keys) {
     if (-not (Test-Path -LiteralPath $path) -or (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $preserved[$path]) { throw "Existing data changed: $path" }
 }
 Get-Content -LiteralPath $report
-Write-Output "PASS: installed v$PriorVersion -> v$ExpectedVersion; data root and 9 existing files preserved; v2.6.4 runtime recovery verified."
+Write-Output "PASS: installed v$PriorVersion -> v$ExpectedVersion; data root and 9 existing files preserved; runtime and data preservation verified."
