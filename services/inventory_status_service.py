@@ -20,7 +20,7 @@ from services.hydration_instruction_service import HydrationInstructionService
 from services.erp_api_client import request_json
 from services.collection_parallel import bounded_map
 
-HEADERS = ['신규분류요약','품명','파워 / CP / AXIS / ADD','사출코드','분리코드','제품코드',
+HEADERS = ['신규분류요약','품명','규격','사출코드','분리코드','제품코드',
            '사출창고','분리창고','수화 지시량','검사접착',
            '누수규격검사','수화 부족','완제품 부족','최우선 납기']
 WAREHOUSES = ['사출창고','분리창고','검사접착','누수규격검사']
