@@ -460,7 +460,7 @@ class BomExplorerService:
         ]
 
     def bom_change_overview(self, limit: int = 1000) -> dict[str, Any]:
-        """Accumulate T registrations, factory changes, and operational BOM changes."""
+        """Accumulate T/S registrations, factory changes, and operational BOM changes."""
         backups = sorted(
             (path for path in self.backup_dir.glob("*.sqlite") if path.stat().st_size > 0),
             key=lambda path: path.stat().st_mtime,
@@ -510,7 +510,7 @@ class BomExplorerService:
                     ).fetchall()
                 ]
             # API 현재 원장이 제공하는 실제 등록일(in_dt, 원천 cdt)로 최근
-            # 90일 T코드 신규등록을 복원한다. 과거 수정이력은 추측하지 않는다.
+            # 90일 T/S코드 신규등록을 복원한다. 과거 수정이력은 추측하지 않는다.
             if self.available():
                 with self._connect(self.database_path) as current:
                     current_registrations = [
@@ -524,7 +524,7 @@ class BomExplorerService:
                             """
                             SELECT nm_cd,nm_nm,fac_cd,fac_nm,in_dt
                             FROM product_name_master
-                            WHERE UPPER(nm_cd) LIKE 'T%'
+                            WHERE (UPPER(nm_cd) LIKE 'T%' OR UPPER(nm_cd) LIKE 'S%')
                               AND NULLIF(TRIM(in_dt),'') IS NOT NULL
                               AND date(substr(in_dt,1,10)) >= date('now','localtime','-90 days')
                             ORDER BY in_dt DESC,nm_cd DESC
@@ -755,7 +755,10 @@ class BomExplorerService:
             for previous_path, current_path in zip(snapshots, snapshots[1:]):
                 previous_stat = previous_path.stat()
                 current_stat = current_path.stat()
+                # Replay retained comparisons once to backfill S events. Stable
+                # event keys keep existing T/BOM events from being duplicated.
                 pair_key = (
+                    "sales-ts-v1|"
                     f"{previous_path.name}:{previous_stat.st_size}:{previous_stat.st_mtime_ns}|"
                     f"{current_path.name}:{current_stat.st_size}:{current_stat.st_mtime_ns}"
                 )
@@ -833,7 +836,7 @@ class BomExplorerService:
                 }
                 for row in connection.execute(
                     "SELECT nm_cd,nm_nm,fac_cd,fac_nm FROM product_name_master "
-                    "WHERE UPPER(nm_cd) LIKE 'T%'"
+                    "WHERE UPPER(nm_cd) LIKE 'T%' OR UPPER(nm_cd) LIKE 'S%'"
                 )
                 if _text(row["nm_cd"])
             }
@@ -881,7 +884,7 @@ class BomExplorerService:
                 product = current_products[code]
                 add_event(
                     category="registration",
-                    change_type="T코드 신규등록",
+                    change_type=f"{code[:1]}코드 신규등록",
                     code=code,
                     product_name=product["name"] or "품명 정보 없음",
                     factory=product["factory"],

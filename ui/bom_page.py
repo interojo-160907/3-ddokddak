@@ -2018,7 +2018,7 @@ class BomStatusPage(QWidget):
         registration_header = QHBoxLayout()
         registration_title = QLabel("신규등록")
         registration_title.setStyleSheet("font-size: 16px; font-weight: 800; color: #172B4D;")
-        registration_description = QLabel("새로 확인된 T코드와 생산공장을 최신순으로 표시합니다.")
+        registration_description = QLabel("새로 확인된 T·S코드와 생산공장을 최신순으로 표시합니다.")
         registration_description.setObjectName("pageDescription")
         registration_header.addWidget(registration_title)
         registration_header.addWidget(registration_description, 1)
@@ -2033,7 +2033,7 @@ class BomStatusPage(QWidget):
         self.registration_result = QLabel("신규등록 이력을 불러오고 있습니다.")
         self.registration_result.setObjectName("bomSectionNote")
         self.registration_table = self._table([
-            "등록일", "T코드", "제품명", "생산공장",
+            "등록일", "T·S코드", "제품명", "생산공장",
         ])
         self.registration_table.setProperty("preserveRowOrder", True)
         self.registration_table.setMinimumHeight(540)
@@ -2050,7 +2050,7 @@ class BomStatusPage(QWidget):
         modification_title = QLabel("수정현황")
         modification_title.setStyleSheet("font-size: 16px; font-weight: 800; color: #172B4D;")
         modification_description = QLabel(
-            "T코드 생산공장 변경과 판매→생산→분리→사출→사출 하위 BOM 변경만 누적합니다."
+            "T·S코드 생산공장 변경과 판매→생산→분리→사출→사출 하위 BOM 변경만 누적합니다."
         )
         modification_description.setObjectName("pageDescription")
         modification_header = QHBoxLayout()
@@ -4101,7 +4101,7 @@ class BomStatusPage(QWidget):
         )
         for row_index, row in enumerate(rows):
             tooltip = self._change_tooltip(
-                ("T코드", row.get("code", "")),
+                ("T·S코드", row.get("code", "")),
                 ("제품명", row.get("product_name", "")),
                 ("생산공장", row.get("factory", "")),
                 ("등록일", self._change_date_label(row.get("detected_at", ""))),
@@ -4121,7 +4121,7 @@ class BomStatusPage(QWidget):
         self.registration_table.setColumnWidth(3, 90)
         filter_text = factory or "전체 공장"
         self.registration_result.setText(
-            f"{self.change_period.currentText()} · {filter_text} · 신규 T코드 {len(rows):,}건 · 최신 감지순"
+            f"{self.change_period.currentText()} · {filter_text} · 신규 T·S코드 {len(rows):,}건 · 최신 감지순"
         )
 
     def _render_modification_rows(self, _index: int = -1) -> None:
