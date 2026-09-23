@@ -549,7 +549,7 @@ def _replace_rows(
 def _inventory_levels(connection: sqlite3.Connection, table: str) -> dict[tuple[str, int, str], tuple[float, float, float]]:
     levels: dict[tuple[str, int, str], tuple[float, float, float]] = {}
     rows = connection.execute(
-        f"SELECT lot_full,stage,item_id,SUM(lm_qty+ip_qty) arrival,"
+        f"SELECT lot_full,stage,item_id,SUM(COALESCE(ip_qty,0)) arrival,"
         f"SUM(stock_qty) stock,SUM(chul_qty) outbound FROM {table} "
         "GROUP BY lot_full,stage,item_id"
     )
@@ -622,19 +622,21 @@ def calculate_completion_evidence(connection: sqlite3.Connection) -> list[dict[s
             continue
 
         # APS WIP의 당시 공정을 기준점으로 삼고, 현재 확인되는 각 공정의
-        # 입고/재고/완료실적을 절대수량으로 비교한다. 앱을 늦게 실행했더라도
+        # 조회기간 입고/완료실적을 절대수량으로 비교한다. 이월재고(lm_qty)는
+        # APS 이전 물량이므로 신규 완료 근거가 아니다. 현재 재고도 이월분을
+        # 포함할 수 있어 입고량의 대체 근거로 사용하지 않는다. 늦게 실행해도
         # APS 이후 이미 통과한 중간공정이 기준선에 묻혀 사라지면 안 된다.
         # APS WIP에 없던 신규/외부 LOT는 회차 비교 기준선 이후 증가분을
         # 인정한다. 새 회차의 기준선은 비워 두므로 첫 수집의 최신 상태부터
         # 즉시 반영되고, 이후 갱신에서도 같은 회차의 현재 상태를 유지한다.
         if origin is not None:
-            inventory_qty = max(0.0, current_arrival, current_stock)
+            inventory_qty = max(0.0, current_arrival)
             production_qty = max(
                 0.0,
                 current_production.get((lot_full, stage, item_id), 0.0),
             )
         else:
-            inventory_qty = max(0.0, current_arrival - base_arrival, current_stock - base_stock)
+            inventory_qty = max(0.0, current_arrival - base_arrival)
             production_qty = max(
                 0.0,
                 current_production.get((lot_full, stage, item_id), 0.0)

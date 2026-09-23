@@ -185,6 +185,26 @@ class ProcessStatusService:
                 "due_date,power,demand_type,dest_country,item_cd,oper_id",
                 params,
             ).fetchall()
+            # Order demand repeats across processes/resources. Convert each original
+            # sales sequence to PCS once, before combining the visible product row.
+            order_pcs = {}
+            columns = {r[1] for r in connection.execute('PRAGMA table_info(aps_plan)')}
+            if {'demand_id', 'seq', 'pack_unit'}.issubset(columns):
+                quantities = {}
+                for demand in connection.execute(
+                    "SELECT DISTINCT so_id,initial,demand_group_id,demand_item_id,demand_item_name,due_date,power,"
+                    "demand_type,dest_country,item_cd,demand_id,seq,demand_qty,pack_unit FROM aps_plan" + where, params
+                ):
+                    identity = tuple(demand[name] or "" for name in (
+                        'so_id','initial','demand_group_id','demand_item_id','demand_item_name',
+                        'due_date','power','demand_type','dest_country','item_cd'))
+                    sequence = (str(demand['seq'] or ''), str(demand['demand_item_id'] or ''))
+                    pack = float(demand['pack_unit'] or 0)
+                    qty = float(demand['demand_qty'] or 0) * pack if pack > 0 else None
+                    quantities.setdefault(identity, {}).setdefault(sequence, set()).add(qty)
+                for identity, sequences in quantities.items():
+                    order_pcs[identity] = (sum(next(iter(values)) for values in sequences.values())
+                        if all(len(values)==1 and None not in values for values in sequences.values()) else None)
             item_names = {
                 str(row["item_id"] or "").strip(): str(
                     row["item_name"] or row["item_name2"] or ""
@@ -224,6 +244,7 @@ class ProcessStatusService:
                     "POWER": specs["POWER"], "CP": specs["CP"], "AXIS": specs["AXIS"],
                     "ADD": specs["ADD"], "납기일": key[5],
                     "진행현황": _channel(key[7], key[8]), "수주수량": float(item["demand_qty"] or 0),
+                    "오더수량PCS": order_pcs.get(key),
                     "비고": order_remarks.get(str(key[0]), ""),
                     "_POWER_NUM": specs["_POWER_NUM"], "_CP_NUM": specs["_CP_NUM"],
                     "_AXIS_NUM": specs["_AXIS_NUM"], "_ADD_NUM": specs["_ADD_NUM"],

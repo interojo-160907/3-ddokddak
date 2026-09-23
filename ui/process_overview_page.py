@@ -162,6 +162,11 @@ class RowTableModel(QAbstractTableModel):
         row = self.rows[index.row()]
         column = self.columns[index.column()]
         value = row.get("공정", {}).get(column, 0) if column in PROCESS_ORDER else row.get(column, "")
+        if column == "오더 수량":
+            value = row.get("오더수량PCS", None)
+            if role == Qt.ToolTipRole:
+                return "APS 수요 × 포장단위 = PCS · 수주 순번별 중복 제거 · 실적 차감 전"
+            if value is None and role == Qt.DisplayRole: return "—"
         if role == Qt.DisplayRole:
             return format_number(value) if isinstance(value, (int, float)) else str(value or "")
         if role == Qt.TextAlignmentRole and isinstance(value, (int, float)):
@@ -394,13 +399,13 @@ class DataTable(Card):
 
 DUE_DETAIL_COLUMNS = [
     "신규분류요약", "이니셜", "수주번호", "T코드", "P코드", "Q코드", "R코드",
-    "품명", "POWER", "CP", "AXIS", "ADD", "납기일", *PROCESS_ORDER,
+    "품명", "POWER", "CP", "AXIS", "ADD", "납기일", *PROCESS_ORDER, "오더 수량",
 ]
 DUE_DETAIL_WIDTHS = {
     "신규분류요약": 150, "이니셜": 82, "수주번호": 100, "T코드": 178,
     "P코드": 178, "Q코드": 178, "R코드": 178, "품명": 210, "POWER": 72,
     "CP": 68, "AXIS": 62, "ADD": 68, "납기일": 92, "사출": 76,
-    "분리": 76, "하이드레이션": 96, "접착": 76, "누수규격": 86, "포장": 76,
+    "오더 수량": 92, "분리": 76, "하이드레이션": 96, "접착": 76, "누수규격": 86, "포장": 76,
 }
 
 
@@ -592,6 +597,13 @@ class DueDetailPage(QWidget):
         filter_layout.addLayout(display_row)
         layout.addWidget(filters)
         self.table = DataTable("납기별 상세", DUE_DETAIL_COLUMNS, DUE_DETAIL_WIDTHS, "품명", False)
+        self.order_quantity_check = QCheckBox("오더 수량 표시")
+        self.order_quantity_check.setToolTip("현재 상세행의 APS 오더 수요를 포장단위로 환산한 PCS 수량입니다. 실적 반영으로 차감하지 않습니다.")
+        self.table.heading_layout.insertWidget(1, self.order_quantity_check)
+        self.table.model.header_labels["오더 수량"] = "오더수량"
+        self.order_quantity_check.toggled.connect(self._update_order_quantity)
+        self.table.table.setColumnHidden(DUE_DETAIL_COLUMNS.index("오더 수량"), True)
+        self.table.table.viewport().installEventFilter(self)
         layout.addWidget(self.table, 1)
         # 부모가 없는 상태에서 setVisible(True)를 호출하면 시작 중 잠깐
         # 독립된 빈 창으로 노출된다. 생성 시점부터 상세 페이지에 귀속한다.
@@ -708,6 +720,7 @@ class DueDetailPage(QWidget):
         for category, button in self.classification_buttons.items():
             button.setChecked(category == "전체")
         self.search.clear()
+        self.order_quantity_check.setChecked(False)
         target_process = self.fixed_process or "전체"
         for button in self.process_buttons:
             button.setChecked(str(button.property("processName") or "") == target_process)
@@ -725,11 +738,44 @@ class DueDetailPage(QWidget):
         self._update_code_visibility()
         self._update_process_visibility()
 
+    def _update_order_quantity(self, *_args):
+        self.table.table.setColumnHidden(DUE_DETAIL_COLUMNS.index("오더 수량"), not self.order_quantity_check.isChecked())
+        self._fit_order_columns()
+
+    def eventFilter(self, watched, event):
+        if hasattr(self, 'table') and watched is self.table.table.viewport() and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._fit_order_columns)
+        return super().eventFilter(watched, event)
+
+    def _fit_order_columns(self):
+        view=self.table.table
+        available=view.viewport().width()-2
+        visible=[i for i in range(len(DUE_DETAIL_COLUMNS)) if not view.isColumnHidden(i)]
+        if available<=0 or not visible:return
+        header=view.horizontalHeader();header.setMinimumSectionSize(24)
+        weights=[DUE_DETAIL_WIDTHS.get(DUE_DETAIL_COLUMNS[i],76) for i in visible]
+        total=sum(weights);remaining=available
+        for pos,(i,weight) in enumerate(zip(visible,weights)):
+            width=max(24,int(available*weight/total)) if pos<len(visible)-1 else max(24,remaining)
+            header.setSectionResizeMode(i,QHeaderView.Interactive)
+            if view.columnWidth(i)!=width:view.setColumnWidth(i,width)
+            remaining-=width
+
+    @staticmethod
+    def _group_order_quantity(members):
+        quantities={}
+        for row in members:
+            if row.get('오더수량PCS') is None:return None
+            key=tuple(str(row.get(k) or '') for k in ('수주번호','이니셜','품목코드','T코드','POWER','CP','AXIS','ADD','납기일'))
+            quantities[key]=max(quantities.get(key,0),float(row['오더수량PCS']))
+        return sum(quantities.values())
+
     def _update_code_visibility(self, *_args: object) -> None:
         if not hasattr(self, "table"):
             return
         for column, checkbox in self.code_checks.items():
             self.table.table.setColumnHidden(DUE_DETAIL_COLUMNS.index(column), not checkbox.isChecked())
+        self._fit_order_columns()
         # stateChanged가 전달된 사용자 변경일 때만 상단 마스터 검색을 재평가한다.
         # 표 로드 후 가시성 동기화 호출에서는 재귀 조회를 만들지 않는다.
         if _args:
@@ -773,6 +819,7 @@ class DueDetailPage(QWidget):
             visible_until = PROCESS_ORDER.index(selected)
         for index, column in enumerate(PROCESS_ORDER):
             self.table.table.setColumnHidden(DUE_DETAIL_COLUMNS.index(column), index > visible_until)
+        self._fit_order_columns()
 
     def _update_name_basis(self, *_args: object) -> None:
         """현재 결과의 품명 열만 바꿔 대용량 표 전체 재생성을 피한다."""
@@ -844,6 +891,7 @@ class DueDetailPage(QWidget):
                 result.append(members[0])
                 continue
             row = dict(members[0])
+            row["오더수량PCS"] = self._group_order_quantity(members)
             row["공정"] = {
                 process_name: sum(
                     float(member.get("공정", {}).get(process_name, 0) or 0)
@@ -888,6 +936,7 @@ class DueDetailPage(QWidget):
         result: list[dict] = []
         for members in grouped.values():
             row = dict(members[0])
+            row["오더수량PCS"] = self._group_order_quantity(members)
             if len(members) > 1:
                 row["공정"] = {
                     process_name: sum(
@@ -1169,6 +1218,7 @@ class ProcessOverviewPage(QWidget):
             fixed_process=fixed_process,
             include_packaging=include_packaging,
         ); self.detail_page.reset_requested.connect(self.reset_all_filters); self.detail_page.filtered_rows_changed.connect(self._update_kpis); self.detail_page.search_scope_changed.connect(self._apply_market_view); root.addWidget(self.detail_page, 1)
+        self.detail_page.order_quantity_check.setVisible(type(self).__name__ in {"ProcessOverviewPage", "LiveProductionNeedPage"})
         if initial_rows is None:
             self.reload_data()
         else:

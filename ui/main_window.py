@@ -1589,7 +1589,19 @@ class MainWindow(QMainWindow):
 
         menu_label = QLabel("업무 프로그램")
         menu_label.setObjectName("SidebarSection")
-        side_layout.addWidget(menu_label)
+        menu_heading = QHBoxLayout()
+        menu_heading.setSpacing(2)
+        menu_heading.addWidget(menu_label)
+        menu_heading.addStretch()
+        self.sidebar_fold_button = QPushButton('전체 접기')
+        self.sidebar_fold_button.setObjectName('CompactFoldButton')
+        self.sidebar_fold_button.setStyleSheet('QPushButton {color:#537399;background:#F0F5FC;border:1px solid #DBE6F4;border-radius:6px;padding:2px 5px;font-size:10px;} QPushButton:hover {background:#E5F0FF;color:#087AFF;}')
+        self.sidebar_fold_button.setIconSize(QSize(10, 10))
+        self.sidebar_fold_button.setFixedHeight(22)
+        self.sidebar_fold_button.setCursor(Qt.PointingHandCursor)
+        self.sidebar_fold_button.clicked.connect(lambda: self._set_all_sidebar_expanded(not self._sidebar_any_expanded()))
+        menu_heading.addWidget(self.sidebar_fold_button)
+        side_layout.addLayout(menu_heading)
 
         # 브랜드와 하단 설정/버전은 고정하고 업무 메뉴 영역만 스크롤한다.
         self.sidebar_menu_scroll = QScrollArea()
@@ -1844,11 +1856,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(button)
 
     def _handle_sidebar_navigation(self, page_key: str) -> None:
-        if page_key == "live_need":
+        if page_key == "process_overview" or page_key in self.PROCESS_KEYS:
+            self.process_container.setVisible(True)
+        elif page_key == "live_need":
             self._set_live_process_expanded(True)
         elif page_key == "lot_work_order":
             self._set_lot_process_expanded(True)
+        self._update_sidebar_fold_button()
         self.show_page(page_key)
+
+    def _sidebar_any_expanded(self) -> bool:
+        return any(not getattr(self, name).isHidden() for name in ('live_process_container', 'lot_process_container') if hasattr(self, name))
+
+    def _update_sidebar_fold_button(self) -> None:
+        if not hasattr(self, "sidebar_fold_button"): return
+        expanded = self._sidebar_any_expanded()
+        self.sidebar_fold_button.setText('전체 접기' if expanded else '전체 펼치기')
+        self.sidebar_fold_button.setIcon(qta.icon('fa6s.angles-up' if expanded else 'fa6s.angles-down', color='#537399'))
+
+    def _set_all_sidebar_expanded(self, expanded: bool) -> None:
+        self.process_container.setVisible(True)
+        self._set_live_process_expanded(expanded)
+        self._set_lot_process_expanded(expanded)
 
     def _toggle_live_process_container(self) -> None:
         self._set_live_process_expanded(not self.live_process_expanded)
@@ -1864,6 +1893,7 @@ class MainWindow(QMainWindow):
         self.live_process_toggle.setProperty("expanded", self.live_process_expanded)
         self.live_process_toggle.style().unpolish(self.live_process_toggle)
         self.live_process_toggle.style().polish(self.live_process_toggle)
+        self._update_sidebar_fold_button()
 
     def _toggle_lot_process_container(self) -> None:
         self._set_lot_process_expanded(not self.lot_process_expanded)
@@ -1879,6 +1909,7 @@ class MainWindow(QMainWindow):
         self.lot_process_toggle.setProperty("expanded", self.lot_process_expanded)
         self.lot_process_toggle.style().unpolish(self.lot_process_toggle)
         self.lot_process_toggle.style().polish(self.lot_process_toggle)
+        self._update_sidebar_fold_button()
 
     def closeEvent(self, event) -> None:
         if self._force_close:

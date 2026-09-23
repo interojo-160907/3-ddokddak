@@ -29,6 +29,23 @@ class SidebarAndRiskUiTest(unittest.TestCase):
         QMainWindow.__init__(window)
         return window
 
+    def test_all_fold_keeps_aps_visible(self):
+        window=self._bare_window()
+        window.process_container=QWidget(window)
+        window.live_process_container=QWidget(window);window.live_process_toggle=QPushButton(window)
+        window.lot_process_container=QWidget(window);window.lot_process_toggle=QPushButton(window)
+        window.sidebar_fold_button=QPushButton(window)
+        window._set_all_sidebar_expanded(False)
+        self.assertFalse(window.process_container.isHidden())
+        self.assertTrue(window.live_process_container.isHidden())
+        self.assertTrue(window.lot_process_container.isHidden())
+        self.assertEqual('전체 펼치기',window.sidebar_fold_button.text())
+        window._set_live_process_expanded(True)
+        self.assertEqual('전체 접기',window.sidebar_fold_button.text())
+        window._set_all_sidebar_expanded(True)
+        self.assertFalse(window.lot_process_container.isHidden())
+        window.deleteLater()
+
     def test_live_process_children_start_collapsed_and_keep_manual_state(self) -> None:
         window = self._bare_window()
         window.live_process_container = QWidget(window)

@@ -6,7 +6,7 @@ on:
       target_version:
         description: 'Published installer to test against every prior release from v2.6.4'
         required: true
-        default: 'v2.8.1'
+        default: 'v2.8.2'
   push:
     tags:
       - "v*"
@@ -109,7 +109,7 @@ jobs:
           $old = Join-Path $recovery 'ddokddak-production3-setup.exe'
           if ((Get-FileHash -LiteralPath $old -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'baddf74655fff923f8846eb8c891673f84d61cc51bc74677196e5c414162e04a') { throw 'Recovery hash mismatch.' }
           $new = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
-          .github/scripts/test-installer-upgrade.ps1 -PriorInstaller $new -Installer $old -PriorVersion '2.8.1' -ExpectedVersion '2.7.10' -Recovery
+          .github/scripts/test-installer-upgrade.ps1 -PriorInstaller $new -Installer $old -PriorVersion ('${{ github.ref_name }}'.TrimStart('v')) -ExpectedVersion '2.7.10' -Recovery
 
       - name: Prepare release assets
         shell: pwsh

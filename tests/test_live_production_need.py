@@ -189,6 +189,34 @@ class LiveNeedCalculationTest(unittest.TestCase):
         _replace_rows(self.connection, "current_inventory", INVENTORY_COLUMNS, [existing])
         self.assertEqual(calculate_completion_evidence(self.connection), [])
 
+    def test_cove_opening_stock_is_not_new_completion_with_empty_baseline(self) -> None:
+        item='P5388A-00.00COV'
+        rows=[_inventory(str(i),f'S20260513-{i}',5,item,lm=qty,outbound=qty)
+              for i,qty in enumerate((1010,1065,910,1110,2045,1705),1)]
+        _replace_rows(self.connection,'current_inventory',INVENTORY_COLUMNS,rows)
+        self.connection.execute("INSERT INTO aps_plan VALUES (1,'80',?,71,71,0,'202609180353','2026-09-30','YH0247','이니셜','CN',1)",(item,))
+        evidence=calculate_completion_evidence(self.connection)
+        self.assertEqual([],evidence)
+        allocate_evidence(self.connection,evidence)
+        self.assertEqual((71,0),tuple(self.connection.execute('SELECT plan_qty,allocated_qty FROM aps_plan WHERE id=1').fetchone()))
+
+    def test_opening_stock_still_on_hand_is_not_completion(self) -> None:
+        _replace_rows(self.connection,'current_inventory',INVENTORY_COLUMNS,
+                      [_inventory('i','S20260513-1',5,'P5388A-00.00COV',lm=7845,stock=7845)])
+        self.assertEqual([],calculate_completion_evidence(self.connection))
+
+    def test_opening_plus_new_inbound_counts_only_new_even_after_outbound(self) -> None:
+        _replace_rows(self.connection,'current_inventory',INVENTORY_COLUMNS,
+                      [_inventory('i','S20260513-1',5,'P5388A-00.00COV',lm=7845,inbound=120,outbound=7965)])
+        evidence=calculate_completion_evidence(self.connection)
+        self.assertEqual(120,evidence[0]['recognized_qty'])
+
+    def test_wip_origin_does_not_make_opening_stock_new_completion(self) -> None:
+        _replace_rows(self.connection,'baseline_wip',WIP_COLUMNS,[dict(warehouse_code='G007',warehouse_name='검사접착창고',stage=3,lot_full='S20260513-1',lot_base='S20260513-1',derived=0,item_id='P5388A-00.00COV',quantity=7845,payload_json='{}')])
+        _replace_rows(self.connection,'current_inventory',INVENTORY_COLUMNS,
+                      [_inventory('i','S20260513-1',5,'P5388A-00.00COV',lm=7845,stock=7845)])
+        self.assertEqual([],calculate_completion_evidence(self.connection))
+
     def test_new_cycle_first_collection_is_current_evidence_not_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

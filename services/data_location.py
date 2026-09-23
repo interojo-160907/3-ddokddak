@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 
@@ -33,6 +34,9 @@ def write_registry_value(name: str, value: str) -> None:
 
 
 def resolve_data_root() -> Path:
+    preview = os.getenv('DDOKDDAK_PROD3_PREVIEW_DATA_DIR', '').strip()
+    if preview and os.getenv('DDOKDDAK_PROD3_PREVIEW') == '1' and not getattr(sys, 'frozen', False):
+        return Path(preview).expanduser()
     configured = read_registry_value(DATA_ROOT_VALUE)
     if not configured:
         configured = os.getenv("DDOKDDAK_PROD3_DATA_DIR", "").strip()
