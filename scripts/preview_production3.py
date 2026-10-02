@@ -1,4 +1,4 @@
-"""Open a separate 2.8.2 review window with an isolated writable data directory.
+"""Open a separate 2.8.3 review window with an isolated writable data directory.
 
 Uses real permission verification. Existing installed apps and their data are
 not stopped/modified. The preview does not start an order collector.
@@ -19,7 +19,7 @@ def prepare():
     source=resolve_data_root()
     # Check authorization against the real configured permission service/cache.
     from services.program_gate import ProgramGate
-    gate=ProgramGate('2.8.2')
+    gate=ProgramGate('2.8.3')
     result=gate.cached_permission() or gate.check()
     if not result.allowed:
         raise RuntimeError('프로그램 사용 권한 확인이 필요합니다.')

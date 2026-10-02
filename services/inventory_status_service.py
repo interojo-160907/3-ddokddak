@@ -47,6 +47,23 @@ def spec_text(x):
 def hydration_shortage(final_shortage, leak_inventory, inspection_inventory, instruction_qty):
     return max(0.0,float(final_shortage or 0)-float(leak_inventory or 0)-float(inspection_inventory or 0)-float(instruction_qty or 0))
 
+def search_expands_product(rows, base, master, search, detail_search):
+    """Only product names/base codes may expand a matched demand to all specs.
+
+    Order identifiers and optical/full-item codes keep the matched demand specs.
+    Both search boxes must allow expansion; comma alternatives use OR.
+    """
+    fields = [base, master.get('nm_nm', ''), master.get('full_gu_nm', '')]
+    for row in rows:
+        fields.extend(row.get(k, '') for k in ('demand_item_name', 'item_name', 'demand_group_id'))
+        fields.extend(norm(row.get(k))[:5] for k in ('demand_item_id', 'item_id'))
+    haystack = ' '.join(str(value or '') for value in fields).casefold()
+    for query in (search, detail_search):
+        tokens = [t.strip().casefold() for t in str(query or '').replace('，', ',').split(',') if t.strip()]
+        if tokens and '*' not in tokens and not any(t in haystack for t in tokens):
+            return False
+    return True
+
 def read_tables(path, tables):
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as c:
         c.row_factory=sqlite3.Row
@@ -87,6 +104,7 @@ class InventoryStatusService:
     @staticmethod
     def _filter_key(filters):
         clean={'markets':['전체'],'classes':['전체'],'search':'','detail_search':'','due':None,'process':'전체', **(filters or {})}
+        clean['_search_schema'] = 2
         for key in ('markets','classes'):
             if key in clean:clean[key]=sorted(str(x) for x in (clean[key] or []))
         return json.dumps(clean,ensure_ascii=False,sort_keys=True,separators=(',',':'))
@@ -200,7 +218,7 @@ class InventoryStatusService:
             if x['use_yn']=='Y': children[norm(x['parent_cd'])].add(norm(x['child_cd']))
         demands=collections.defaultdict(list)
         for row in plans: demands[row['demand_id']].append(row)
-        selected=[];bases=set();tokens=[x.strip().casefold() for x in f.get('search','').replace('，',',').split(',') if x.strip()]
+        selected=[];bases=set();visible_codes=set();expanded_bases=set();tokens=[x.strip().casefold() for x in f.get('search','').replace('，',',').split(',') if x.strip()]
         op=f.get('process','전체');markets=set(f.get('markets') or ['전체']);classes=set(f.get('classes') or ['전체'])
         for rows in demands.values():
             r=rows[0]
@@ -213,8 +231,13 @@ class InventoryStatusService:
             haystack=' '.join(str(x.get(k) or '') for x in rows for k in ('so_id','initial','demand_item_id','demand_item_name','item_id','item_name','power','demand_group_id')).casefold()
             if tokens and '*' not in tokens and not any(t in haystack for t in tokens): continue
             detail=str(f.get('detail_search') or '').casefold().strip()
-            if detail and detail not in haystack: continue
+            detail_tokens=[t.strip() for t in detail.replace('，',',').split(',') if t.strip()]
+            if detail_tokens and '*' not in detail_tokens and not any(t in haystack for t in detail_tokens): continue
             selected.extend(rows)
+            visible_codes.update(pcodes)
+            for base in {c[:5] for c in pcodes}:
+                if search_expands_product(rows,base,master.get(base,{}),f.get('search'),detail):
+                    expanded_bases.add(base)
             if has_shortage:bases.update(c[:5] for c in pcodes)
         codes=set(bases)
         for b in bases:
@@ -253,6 +276,7 @@ class InventoryStatusService:
             if absent:raise ValueError('ERP 전체규격 목록에 APS 품목 누락: '+', '.join(sorted(absent)[:5]))
             rows=[]
             for pc,x in sorted(rr.items(),key=lambda z:spec_key(z[1])):
+                if b not in expanded_bases and pc not in visible_codes:continue
                 r=resolve(pc,'R');q=resolve(pc,'Q');note=[]
                 if not r:note.append('R 연결 미확인')
                 if not q:note.append('Q 연결 미확인')

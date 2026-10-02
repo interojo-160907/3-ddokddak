@@ -6,7 +6,7 @@ on:
       target_version:
         description: 'Published installer to test against every prior release from v2.6.4'
         required: true
-        default: 'v2.8.2'
+        default: 'v2.8.3'
   push:
     tags:
       - "v*"

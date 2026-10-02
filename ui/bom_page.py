@@ -1159,6 +1159,7 @@ class BomStatusPage(QWidget):
         stage_headers.setContentsMargins(18, 2, 18, 2)
         stage_headers.setSpacing(22)
         self.stage_copy_buttons: list[QPushButton] = []
+        self.stage_vertical_copy_buttons: list[QPushButton] = []
         self.stage_copy_feedback_timers: list[QTimer] = []
         for stage_index, text in enumerate(BomFlowView.STAGE_TITLES):
             stage_header = QWidget()
@@ -1170,7 +1171,7 @@ class BomStatusPage(QWidget):
             label.setObjectName("bomStageHeader")
             label.setAlignment(Qt.AlignCenter)
             stage_header_layout.addWidget(label)
-            copy_button = QPushButton("복사")
+            copy_button = QPushButton("쉼표")
             copy_button.setObjectName("bomStageCopyButton")
             copy_button.setIcon(qta.icon("fa5s.copy", color="#52677E"))
             copy_button.setEnabled(False)
@@ -1187,6 +1188,15 @@ class BomStatusPage(QWidget):
             )
             self.stage_copy_feedback_timers.append(feedback_timer)
             stage_header_layout.addWidget(copy_button)
+            vertical_button = QPushButton("세로")
+            vertical_button.setObjectName("bomStageCopyButton")
+            vertical_button.setEnabled(False)
+            vertical_button.setToolTip(f"활성화된 {text} 품번을 엑셀 한 열에 한 셀씩 붙여넣도록 복사합니다.")
+            vertical_button.clicked.connect(
+                lambda _checked=False, index=stage_index: self._copy_active_stage_codes(index, vertical=True)
+            )
+            self.stage_vertical_copy_buttons.append(vertical_button)
+            stage_header_layout.addWidget(vertical_button)
             stage_header_layout.addStretch(1)
             stage_headers.addWidget(stage_header, 1)
         graph_layout.addLayout(stage_headers)
@@ -1217,10 +1227,16 @@ class BomStatusPage(QWidget):
             codes = active_stages[index] if index < len(active_stages) else []
             count = len(codes) if isinstance(codes, list) else 0
             button.setEnabled(count > 0)
-            button.setText(f"복사 {count}" if count else "복사")
+            button.setText(f"쉼표 {count}" if count else "쉼표")
             button.setProperty("copied", False)
             button.style().unpolish(button)
             button.style().polish(button)
+            vertical = self.stage_vertical_copy_buttons[index]
+            vertical.setEnabled(count > 0)
+            vertical.setText(f"세로 {count}" if count else "세로")
+            vertical.setProperty("copied", False)
+            vertical.style().unpolish(vertical)
+            vertical.style().polish(vertical)
 
     def _restore_stage_copy_button(self, stage_index: int) -> None:
         if not 0 <= stage_index < len(self.stage_copy_buttons):
@@ -1229,28 +1245,35 @@ class BomStatusPage(QWidget):
         codes = stages[stage_index] if stage_index < len(stages) else []
         button = self.stage_copy_buttons[stage_index]
         button.setEnabled(bool(codes))
-        button.setText(f"복사 {len(codes)}" if codes else "복사")
+        button.setText(f"쉼표 {len(codes)}" if codes else "쉼표")
         button.setProperty("copied", False)
         button.style().unpolish(button)
         button.style().polish(button)
+        vertical = self.stage_vertical_copy_buttons[stage_index]
+        vertical.setEnabled(bool(codes))
+        vertical.setText(f"세로 {len(codes)}" if codes else "세로")
+        vertical.setProperty("copied", False)
+        vertical.style().unpolish(vertical)
+        vertical.style().polish(vertical)
 
-    def _copy_active_stage_codes(self, stage_index: int) -> None:
+    def _copy_active_stage_codes(self, stage_index: int, vertical: bool = False) -> None:
         stages = self.flow_view.active_codes_by_stage()
         if not 0 <= stage_index < len(stages):
             return
         codes = list(dict.fromkeys(stages[stage_index]))
         if not codes:
             return
-        _set_persistent_clipboard_text(", ".join(codes))
+        _set_persistent_clipboard_text(("\r\n" if vertical else ", ").join(codes))
         stage_title = BomFlowView.STAGE_TITLES[stage_index]
-        button = self.stage_copy_buttons[stage_index]
-        button.setText("복사됨 ✓")
+        self._restore_stage_copy_button(stage_index)
+        button = (self.stage_vertical_copy_buttons if vertical else self.stage_copy_buttons)[stage_index]
+        button.setText("완료 ✓")
         button.setProperty("copied", True)
         button.style().unpolish(button)
         button.style().polish(button)
         self.stage_copy_feedback_timers[stage_index].start()
         self.graph_note.setText(
-            f"{stage_title} 활성 품번 {len(codes):,}개를 복사했습니다."
+            f"{stage_title} 활성 품번 {len(codes):,}개를 {'엑셀 세로' if vertical else '쉼표 구분'} 형식으로 복사했습니다."
         )
 
     @staticmethod
