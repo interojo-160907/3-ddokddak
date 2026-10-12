@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from services.backward_source import adapt, outbound_state, supplement_order_quantities, validate_payload, SOURCE
+from services.backward_source import adapt, applicable_factories, outbound_state, supplement_order_quantities, validate_payload, SOURCE
 from collectors import process_status_collector as collector
 from collectors import live_production_need_collector as live
 from collectors import aps_update_monitor as monitor
@@ -47,10 +47,35 @@ class BackwardMappingTests(unittest.TestCase):
         b.update(oper_cd="85", eff_fac_cd="")
         self.assertEqual(adapt([b], [p], [a]), [])
 
-    def test_factory_conflict_rejected(self):
+    def test_blank_site_shared_factory_keeps_full_quantity_once(self):
         b, p, a = sources()
+        for effective in [None, "01", "04"]:
+            b["eff_fac_cd"] = effective
+            rows = adapt([b], [p], [a, a, dict(a, fac_cd="01")])
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["plan_qty"], 100)
+            self.assertEqual(rows[0]["_metadata"]["applicable_factories"], ["01", "04"])
+
+    def test_explicit_site_overrides_machine_registration_and_fallback(self):
+        b, p, a = sources()
+        for site in ["04", "S관(3공장)"]:
+            b.update(res_site_id=site, eff_fac_cd="01")
+            self.assertEqual(adapt([b], [p], [dict(a, fac_cd="01")])[0]["plan_qty"], 100)
+            self.assertEqual(applicable_factories(b, {"01", "04"}), {"04"})
+        for site in ["01", "02", "A관(1공장)", "C관(2공장)"]:
+            b.update(res_site_id=site, eff_fac_cd="04")
+            self.assertEqual(adapt([b], [p], [a]), [])
+
+    def test_blank_site_without_s_registration_is_excluded(self):
+        b, p, a = sources()
+        for arrange in [[], [dict(a, fac_cd="01")]]:
+            self.assertEqual(adapt([b], [p], arrange), [])
+
+    def test_unknown_explicit_site_does_not_fall_back_to_registration(self):
+        b, p, a = sources()
+        b.update(res_site_id="unknown", eff_fac_cd=None)
         with self.assertRaises(RuntimeError):
-            adapt([b], [p], [a, dict(a, fac_cd="02")])
+            adapt([b], [p], [a])
 
     def test_conflicting_metadata_rejected(self):
         b, p, a = sources()
@@ -148,6 +173,22 @@ class BackwardCycleTests(unittest.TestCase):
              patch.object(live, "_collect_wip") as collect:
             self.assertEqual(live.refresh()["status"], "waiting_wip")
             collect.assert_not_called()
+
+    def test_mapping_revision_rebuilds_with_matching_unchanged_wip(self):
+        state = self.state()
+        old = {"source_kind": "aps-backward-plan:v1", "source_identity": "old-mapping",
+               "wip_source_refreshed_at": state["wip_at"], "calculation_revision": 2}
+        with patch.object(live, "_aps_cycle", return_value=state["backward_at"]), \
+             patch.object(live, "_source_provenance", return_value=state), \
+             patch.object(live, "_live_meta", return_value=old), \
+             patch.object(live, "_read_json", return_value=old), \
+             patch.object(live, "_aps_item_ids", return_value={"P1"}), \
+             patch.object(live, "probe_wip_source", return_value={"ready": True, "source_refreshed_at": state["wip_at"]}), \
+             patch.object(live, "_collect_wip", return_value=([], state["wip_at"], 0)), \
+             patch.object(live, "_atomic_json"), \
+             patch.object(live, "_collect_inventory", side_effect=RuntimeError("reached-inventory")):
+            with self.assertRaisesRegex(RuntimeError, "reached-inventory"):
+                live.refresh()
 
     def test_dashboard_rejects_plan_result_with_same_timestamp(self):
         state = self.state()

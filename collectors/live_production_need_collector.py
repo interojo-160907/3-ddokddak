@@ -910,7 +910,7 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
             # Backward and WIP loads can occur in either order. Require the exact
             # WIP snapshot observed in the completed outbound run, not time order.
             wip_not_changed = bool(
-                aps_changed and str(previous_status.get("source_kind") or "").startswith("aps-backward-plan")
+                aps_changed and previous_status.get("source_kind") == source.get("source_kind")
                 and previous_wip and probed_wip_source <= previous_wip
             )
             wip_before_aps = probed_wip_source != expected_wip
@@ -973,7 +973,7 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
         phase_seconds["wip"] = round(time.perf_counter() - phase_started, 3)
         collected_wip_stale = bool(
             aps_changed and previous_wip and wip_source <= previous_wip
-            and (not expected_wip or str(previous_status.get("source_kind") or "").startswith("aps-backward-plan"))
+            and (not expected_wip or previous_status.get("source_kind") == source.get("source_kind"))
         )
         if (expected_wip and wip_source != expected_wip) or collected_wip_stale:
             result = {

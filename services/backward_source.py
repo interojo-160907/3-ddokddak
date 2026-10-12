@@ -5,7 +5,7 @@ from collections import defaultdict
 import math
 import re
 
-SOURCE = "aps-backward-plan:v1"
+SOURCE = "aps-backward-plan:v2"
 PROCESS_CODES = {"10", "20", "45", "55", "80"}
 COMMON_FIELDS = (
     "demand_item_name", "cust_id", "cust_name", "demand_group_id",
@@ -17,6 +17,22 @@ DEMAND_FIELDS = COMMON_FIELDS + ("demand_qty", "initial", "so_id", "seq", "power
 
 def norm(value):
     return str(value or "").strip().upper()
+
+
+def applicable_factories(original, registered):
+    """Explicit outbound site wins; a blank site permits every registered factory."""
+    site = norm(original.get("res_site_id"))
+    if not site:
+        return set(registered)
+    aliases = {"01": "01", "02": "02", "04": "04",
+               "A관(1공장)": "01", "C관(2공장)": "02", "S관(3공장)": "04"}
+    factory = aliases.get(site)
+    if factory is None and norm(original.get("fac_basis")) == "A":
+        # The outbound API also resolves explicit site identifiers.
+        factory = norm(original.get("eff_fac_cd"))
+    if factory not in {"01", "02", "04"}:
+        raise RuntimeError(f"아웃바운드 사이트 공장 미확인: {site}")
+    return {factory}
 
 
 def outbound_state(payload):
@@ -73,15 +89,11 @@ def adapt(backward, plan, arrange):
         oper = norm(original.get("oper_cd"))
         if oper not in PROCESS_CODES:
             continue
-        factory = norm(original.get("eff_fac_cd"))
         machine_key = (norm(original.get("sale_cd")), oper)
         registered = set(factories[machine_key]) - {""}
-        if registered and (len(registered) != 1 or factory not in registered):
-            raise RuntimeError(f"기계등록 공장 판정 충돌: {machine_key}")
-        if factory != "04":
+        eligible = applicable_factories(original, registered)
+        if "04" not in eligible:
             continue
-        if not str(original.get("res_site_id") or "").strip() and registered != {"04"}:
-            raise RuntimeError(f"사이트 공란의 공장 근거 없음: {machine_key}")
         key = norm(original.get("demand_id"))
         metadata, conflicts = unique_fields(demands[key], DEMAND_FIELDS)
         matched = bool(demands[key])
@@ -120,6 +132,8 @@ def adapt(backward, plan, arrange):
             row["item_name"] = machine_name.get("nm_nm", "")
         row["_backward"] = original
         row["_metadata"] = {"source": "plan-demand" if matched else "plan-order-sequence-common",
+                            "factory_basis": "outbound-site" if norm(original.get("res_site_id")) else "registered-factories",
+                            "applicable_factories": sorted(eligible),
                             "demand_qty_status": "known" if row.get("demand_qty") is not None else "unknown",
                             "customer_status": "not-required" if special else "known" if row["cust_name"] else "unknown"}
         result.append(row)
