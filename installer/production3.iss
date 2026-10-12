@@ -183,7 +183,7 @@ begin
   if CurUninstallStep = usUninstall then
   begin
     { Preserve the data root and user data so reinstall resumes safely. }
-    MsgBox(
+    if not UninstallSilent then MsgBox(
       '프로그램을 제거했습니다.' + #13#10 +
       '재설치를 위해 데이터 저장 위치, 수집 데이터, 설정 및 리드지 자료는 보존했습니다.',
       mbInformation,

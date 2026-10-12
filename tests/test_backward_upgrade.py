@@ -102,6 +102,7 @@ class UpgradeTests(unittest.TestCase):
         self.assertIn('"2.8.4"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
         self.assertIn('filevers=(2, 8, 4, 0)', (root/'installer/version_info.txt').read_text(encoding='utf-8'))
         self.assertNotIn('DelTree(', (root/'installer/production3.iss').read_text(encoding='utf-8'))
+        self.assertIn('if not UninstallSilent then MsgBox(', (root/'installer/production3.iss').read_text(encoding='utf-8'))
 
 
 class CollectionLockTests(unittest.TestCase):
