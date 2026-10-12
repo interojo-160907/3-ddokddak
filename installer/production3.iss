@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "2.8.3"
+#define MyAppVersion "2.8.4"
 #define MyAppExeName "gui_app_pyside6.exe"
 #define MySourceDir "..\dist\production3"
 
@@ -153,6 +153,14 @@ begin
   ForceDirectories(Root + 'production-performance\raw_api');
   ForceDirectories(Root + 'live-production-need\snapshot');
   ForceDirectories(Root + 'live-production-need\backup');
+  ForceDirectories(Root + 'backward-v1\process-status\snapshot');
+  ForceDirectories(Root + 'backward-v1\process-status\backup');
+  ForceDirectories(Root + 'backward-v1\process-status\raw_api');
+  ForceDirectories(Root + 'backward-v1\live-production-need\snapshot');
+  ForceDirectories(Root + 'backward-v1\live-production-need\backup');
+  ForceDirectories(Root + 'backward-v1\inventory-status\snapshots');
+  ForceDirectories(Root + 'backward-v1\inventory-status\view-snapshots');
+  ForceDirectories(Root + 'backward-v1\settings');
   ForceDirectories(Root + 'settings');
   ForceDirectories(Root + '안전모드');
 end;
@@ -164,36 +172,20 @@ begin
     RegWriteStringValue(HKCU, RegistryPath, DataRootValue, DataDirPage.Values[0]);
     RegWriteStringValue(HKCU, RegistryPath, ManagementApiUrlValue, ManagementApiUrl);
     EnsureDataDirectories(DataDirPage.Values[0]);
+    { Every install/reinstall requests a fresh full Backward collection. }
+    DeleteFile(AddBackslash(DataDirPage.Values[0]) + 'backward-v1\settings\version_collection_bootstrap.json');
+    DeleteFile(AddBackslash(DataDirPage.Values[0]) + 'backward-v1\settings\full_refresh_status.json');
   end;
 end;
 
-procedure DeleteAppOwnedData(const DataRoot: String);
-begin
-  if not SafeDataRoot(DataRoot) then
-    Exit;
-  DelTree(AddBackslash(DataRoot) + 'bom', True, True, True);
-  DelTree(AddBackslash(DataRoot) + 'process-status', True, True, True);
-  DelTree(AddBackslash(DataRoot) + 'production-performance', True, True, True);
-  DelTree(AddBackslash(DataRoot) + 'live-production-need', True, True, True);
-  DelTree(AddBackslash(DataRoot) + 'aps', True, True, True);
-  DelTree(AddBackslash(DataRoot) + 'item-codes', True, True, True);
-  DelTree(AddBackslash(DataRoot) + 'settings', True, True, True);
-  DelTree(AddBackslash(DataRoot) + '리드지 미리보기 캐시', True, True, True);
-  DelTree(AddBackslash(DataRoot) + '리드지 벡터 미리보기 캐시', True, True, True);
-end;
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
-var
-  DataRoot: String;
 begin
   if CurUninstallStep = usUninstall then
   begin
-    DataRoot := SavedDataRoot();
-    DeleteAppOwnedData(DataRoot);
-    RegDeleteKeyIncludingSubkeys(HKCU, RegistryPath);
+    { Preserve the data root and user data so reinstall resumes safely. }
     MsgBox(
-      'API 수집 데이터와 캐시는 삭제했습니다.' + #13#10 +
-      '리드지 PDF 백업, 리드지 수동 등록, 리드지 이미지 자료는 보존했습니다.',
+      '프로그램을 제거했습니다.' + #13#10 +
+      '재설치를 위해 데이터 저장 위치, 수집 데이터, 설정 및 리드지 자료는 보존했습니다.',
       mbInformation,
       MB_OK
     );

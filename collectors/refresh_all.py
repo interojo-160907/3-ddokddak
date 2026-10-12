@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -22,9 +23,10 @@ except ImportError:
 
 
 from services.api_credentials import resolve_api_key
+from collectors.process_status_collector import refresh as refresh_aps_full
 
 
-RESULT_PATH = resolve_data_root() / "settings" / "full_refresh_status.json"
+RESULT_PATH = resolve_data_root() / "backward-v1" / "settings" / "full_refresh_status.json"
 
 
 def _write_result(value: dict) -> None:
@@ -37,19 +39,26 @@ def _write_result(value: dict) -> None:
     temporary.replace(RESULT_PATH)
 
 
-def main() -> int:
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
+def main(force_full: bool | None = None) -> int:
+    if force_full is None:
+        force_full = "--full" in sys.argv[1:]
     api_key = resolve_api_key()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     report = {
         "started_at": started_at,
         "completed_at": "",
         "results": {},
+        "force_full": force_full,
     }
     _write_result(report)
     base_collectors = (
         ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=True)),
-        ("aps", lambda: refresh_aps(api_key=api_key, timeout=300)),
-        ("production", lambda: refresh_production(api_key=api_key, timeout=240)),
+        ("aps", lambda: (refresh_aps_full if force_full else refresh_aps)(api_key=api_key, timeout=300)),
+        ("production", lambda: refresh_production(api_key=api_key, timeout=240, force_full=force_full)),
     )
     failed = False
     # These source snapshots are independent. Running them together keeps a
@@ -59,7 +68,10 @@ def main() -> int:
         for job in as_completed(jobs):
             key = jobs[job]
             try:
-                report["results"][key] = {"status": "success", "result": job.result(),
+                result = job.result()
+                status = result.get("status", "error")
+                failed = failed or status != "success"
+                report["results"][key] = {"status": status, "result": result,
                                            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
             except Exception as exc:
                 failed = True
@@ -73,7 +85,9 @@ def main() -> int:
     # WIP/performance, warehouses and hydration use the latest base snapshots.
     key = "live"
     try:
-        live_result = refresh_live()
+        if report["results"].get("aps", {}).get("status") != "success":
+            raise RuntimeError("Backward APS 수집이 완료되지 않아 실시간 계산을 보류합니다.")
+        live_result = refresh_live(force_full=True) if force_full else refresh_live()
         report["results"][key] = {"status": live_result.get('status','error'), "result": live_result,
                                    "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
     except Exception as exc:

@@ -24,9 +24,9 @@ class CollectionDirectoryTests(unittest.TestCase):
                 root / source / child
                 for source, children in {
                     "bom": ("snapshot", "backup", "raw_api"),
-                    "process-status": ("snapshot", "backup", "raw_api"),
+                    "backward-v1/process-status": ("snapshot", "backup", "raw_api"),
                     "production-performance": ("snapshot", "backup", "raw_api"),
-                    "live-production-need": ("snapshot", "backup"),
+                    "backward-v1/live-production-need": ("snapshot", "backup"),
                 }.items()
                 for child in children
             }
@@ -35,11 +35,11 @@ class CollectionDirectoryTests(unittest.TestCase):
 
 
 class VersionBootstrapTests(unittest.TestCase):
-    def test_live_partial_is_a_completed_base_pass(self):
+    def test_live_partial_does_not_complete_initial_collection(self):
         report={'completed_at':'2026-09-19T07:00:00+09:00','results':{
             'bom':{'status':'success'},'aps':{'status':'success'},
             'production':{'status':'success'},'live':{'status':'partial'}}}
-        self.assertTrue(_version_bootstrap_ready(report))
+        self.assertFalse(_version_bootstrap_ready(report))
         report['results']['live']['status']='running'
         self.assertFalse(_version_bootstrap_ready(report))
 

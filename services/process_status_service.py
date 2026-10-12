@@ -14,7 +14,7 @@ from services import safe_mode
 DATA_DIR = Path(
     os.getenv(
         "DDOKDDAK_PROD3_PROCESS_DATA_DIR",
-        str(DATA_CENTER_DIR / "process-status"),
+        str(DATA_CENTER_DIR / "backward-v1/process-status"),
     )
 )
 DB_PATH = DATA_DIR / "aps_process_status.sqlite"
@@ -200,7 +200,7 @@ class ProcessStatusService:
                         'due_date','power','demand_type','dest_country','item_cd'))
                     sequence = (str(demand['seq'] or ''), str(demand['demand_item_id'] or ''))
                     pack = float(demand['pack_unit'] or 0)
-                    qty = float(demand['demand_qty'] or 0) * pack if pack > 0 else None
+                    qty = float(demand['demand_qty']) * pack if pack > 0 and demand['demand_qty'] is not None else None
                     quantities.setdefault(identity, {}).setdefault(sequence, set()).add(qty)
                 for identity, sequences in quantities.items():
                     order_pcs[identity] = (sum(next(iter(values)) for values in sequences.values())

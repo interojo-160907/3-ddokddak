@@ -321,7 +321,7 @@ QFrame#Card[selectedProcess="true"]:hover {
 }
 
 QLabel#kpiValue[compact="true"] {
-    font-size: 21px;
+    font-size: 19px;
 }
 
 QFrame#DashboardCard,
@@ -1455,7 +1455,6 @@ QTabBar#dashboardTabs::tab:selected {
     border-radius: 0;
 }
 
-QStackedWidget#dashboardStack {
 QPushButton#primaryButton, QPushButton#smallPrimaryButton {
     min-height: 38px;
     background: #0A7AFF;

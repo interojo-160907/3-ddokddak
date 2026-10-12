@@ -26,7 +26,7 @@ from services.data_location import resolve_data_root
 DATA_DIR = Path(
     os.getenv(
         "DDOKDDAK_PROD3_LIVE_NEED_DATA_DIR",
-        str(resolve_data_root() / "live-production-need"),
+        str(resolve_data_root() / "backward-v1/live-production-need"),
     )
 )
 DB_PATH = DATA_DIR / "current_production_need.sqlite"
@@ -35,7 +35,7 @@ BACKUP_DIR = DATA_DIR / "backup"
 APS_DB_PATH = Path(
     os.getenv(
         "DDOKDDAK_PROD3_PROCESS_DB",
-        str(resolve_data_root() / "process-status" / "aps_process_status.sqlite"),
+        str(resolve_data_root() / "backward-v1/process-status" / "aps_process_status.sqlite"),
     )
 )
 BASE_URL = os.getenv("DDOKDDAK_PROD3_API_BASE_URL", "https://plan.interojo.net").rstrip("/")
@@ -85,7 +85,7 @@ def allocation_priority(row: dict[str, Any]) -> tuple[str, int, int, str, int]:
     initial = str(row.get("initial") or "").strip()
     demand_type = str(row.get("demand_type") or "").strip()
     destination = str(row.get("dest_country") or "").strip()
-    if initial:
+    if initial and initial not in {"PB", "국내", "해외"} and "안전" not in initial:
         channel_rank = 0
     elif demand_type.upper() == "PB":
         channel_rank = 1
@@ -172,6 +172,17 @@ def _aps_cycle() -> str:
         return cycle
     finally:
         connection.close()
+
+
+def _source_provenance() -> dict[str, Any]:
+    if not APS_DB_PATH.is_file():
+        return {}
+    with closing(sqlite3.connect(f"file:{APS_DB_PATH.as_posix()}?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        if not connection.execute("SELECT 1 FROM sqlite_master WHERE name='source_provenance'").fetchone():
+            return {}
+        row = connection.execute("SELECT * FROM source_provenance WHERE id=1").fetchone()
+        return dict(row) if row else {}
 
 
 def _live_meta() -> dict[str, Any]:
@@ -843,7 +854,7 @@ def _backup_and_replace(temporary_db: Path, stamp: str) -> None:
             pass
 
 
-def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, inventory_progress=None, inventory_reuse=None, inventory_error=None) -> dict[str, Any]:
+def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, inventory_progress=None, inventory_reuse=None, inventory_error=None, force_full: bool = False) -> dict[str, Any]:
     refresh_started = time.perf_counter()
     phase_seconds: dict[str, float] = {}
     now = datetime.now().astimezone()
@@ -852,14 +863,17 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
     aps_cycle = _aps_cycle()
     previous_meta = _live_meta()
     previous_status = _read_json(STATUS_PATH)
-    aps_changed = str(previous_meta.get("aps_source_refreshed_at") or "") != aps_cycle
+    source = _source_provenance()
+    source_changed = bool(source) and previous_status.get("source_identity") != source.get("source_identity")
+    aps_changed = str(previous_meta.get("aps_source_refreshed_at") or "") != aps_cycle or source_changed
+    expected_wip = str(source.get("wip_at") or "")
     try:
         previous_revision = int(previous_status.get("calculation_revision") or 0)
     except (TypeError, ValueError):
         previous_revision = 0
     # 0.1.21의 이전 계산 DB는 새 회차 첫 수집값을 기준선에도 복사했다.
     # 같은 APS 회차여도 개정 전 결과라면 한 번 재초기화해 최신값을 온전히 반영한다.
-    new_cycle = aps_changed or previous_revision != CALCULATION_REVISION
+    new_cycle = force_full or aps_changed or previous_revision != CALCULATION_REVISION
     target_items = _aps_item_ids()
     if not target_items:
         raise RuntimeError("현재 APS 회차의 생산 품목코드가 없습니다.")
@@ -892,6 +906,14 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
             and probed_wip_source
             and probed_wip_source < aps_cycle
         )
+        if expected_wip:
+            # Backward and WIP loads can occur in either order. Require the exact
+            # WIP snapshot observed in the completed outbound run, not time order.
+            wip_not_changed = bool(
+                aps_changed and str(previous_status.get("source_kind") or "").startswith("aps-backward-plan")
+                and previous_wip and probed_wip_source <= previous_wip
+            )
+            wip_before_aps = probed_wip_source != expected_wip
         if wip_not_ready or wip_not_changed or wip_before_aps:
             if wip_not_ready:
                 source_times = wip_probe.get("source_times") or []
@@ -904,7 +926,7 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
                 detail = f"현재 WIP 회차 {probed_wip_source or '미확인'}"
             else:
                 detail = (
-                    f"WIP 회차 {probed_wip_source} · APS 회차 {aps_cycle}보다 이전"
+                    f"WIP 회차 {probed_wip_source} · 필요한 기준 회차 {expected_wip or aps_cycle} 불일치"
                 )
             result = {
                 **previous_status,
@@ -949,7 +971,11 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
             _atomic_json(STATUS_PATH, result)
             return result
         phase_seconds["wip"] = round(time.perf_counter() - phase_started, 3)
-        if aps_changed and previous_wip and wip_source <= previous_wip:
+        collected_wip_stale = bool(
+            aps_changed and previous_wip and wip_source <= previous_wip
+            and (not expected_wip or str(previous_status.get("source_kind") or "").startswith("aps-backward-plan"))
+        )
+        if (expected_wip and wip_source != expected_wip) or collected_wip_stale:
             result = {
                 **previous_status,
                 "status": "waiting_wip",
@@ -982,7 +1008,7 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
     )
     phase_seconds["production"] = round(time.perf_counter() - phase_started, 3)
     if inventory_progress:inventory_progress('부족수량 계산')
-    if _aps_cycle() != aps_cycle:
+    if _aps_cycle() != aps_cycle or _source_provenance() != source:
         raise RuntimeError("계산 수집 중 APS 회차가 바뀌어 마지막 정상 결과를 유지합니다.")
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -1028,6 +1054,8 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
         "calculation_revision": CALCULATION_REVISION,
         "database": str(DB_PATH),
         "aps_source_refreshed_at": aps_cycle,
+        "source_identity": source.get("source_identity", ""),
+        "source_kind": source.get("source_kind", "aps-plan"),
         "wip_source_refreshed_at": wip_source,
         "wip_checked_at": captured_at if new_cycle else previous_status.get("wip_checked_at"),
         "wip_monitoring": False,
@@ -1058,6 +1086,10 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
     return result
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     parser = argparse.ArgumentParser(description="APS 회차 기준 실시간 생산 필요수량 계산")
     parser.add_argument(

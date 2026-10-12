@@ -6,7 +6,7 @@ on:
       target_version:
         description: 'Published installer to test against every prior release from v2.6.4'
         required: true
-        default: 'v2.8.3'
+        default: 'v2.8.4'
   push:
     tags:
       - "v*"
@@ -74,6 +74,12 @@ jobs:
           }
           & $iscc "installer\production3.iss"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify fresh install and reinstall data preservation
+        shell: pwsh
+        run: |
+          $installer = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
+          .github/scripts/test-installer-reinstall.ps1 -Installer $installer
 
       - name: Verify direct upgrades from all published versions
         shell: pwsh

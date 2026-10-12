@@ -10,7 +10,7 @@ from services.process_status_service import PROCESS_ORDER, ProcessStatusService
 DATA_DIR = Path(
     os.getenv(
         "DDOKDDAK_PROD3_LIVE_NEED_DATA_DIR",
-        str(DATA_CENTER_DIR / "live-production-need"),
+        str(DATA_CENTER_DIR / "backward-v1/live-production-need"),
     )
 )
 DB_PATH = DATA_DIR / "current_production_need.sqlite"

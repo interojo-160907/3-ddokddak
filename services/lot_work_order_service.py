@@ -514,7 +514,7 @@ class LotWorkOrderService:
         initial = str(row.get("initial") or "").strip()
         demand_type = str(row.get("demand_type") or "").strip()
         destination = str(row.get("dest_country") or "").strip()
-        if initial:
+        if initial and initial not in {"PB", "국내", "해외"} and "안전" not in initial:
             channel_rank = 0
         elif demand_type.upper() == "PB":
             channel_rank = 1

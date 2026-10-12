@@ -22,7 +22,7 @@ from services.live_production_need_service import DB_PATH, STATUS_PATH
 from collectors import live_production_need_collector as live_collector
 
 
-def refresh() -> dict:
+def refresh(*, force_full: bool = False) -> dict:
     service = InventoryStatusService()
     previous = live_collector._read_json(service.cache / 'refresh_status.json')
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
@@ -68,6 +68,7 @@ def refresh() -> dict:
             save_report()
 
     def reuse_warehouse(warehouse, query):
+        if force_full:return None
         # During recovery reuse only recent, validated responses for the exact
         # same ledger period. Normal manual/automatic refreshes fetch everything.
         if previous.get('status') not in {'partial', 'running', 'cancelled'}:return None
@@ -95,7 +96,8 @@ def refresh() -> dict:
         try:
             status = live_collector.refresh(api_key=key, inventory_observer=warehouse_received,
                                              inventory_progress=warehouse_started,
-                                             inventory_reuse=reuse_warehouse, inventory_error=warehouse_failed)
+                                             inventory_reuse=reuse_warehouse, inventory_error=warehouse_failed,
+                                             force_full=force_full)
         except Exception as exc:
             status = {**live_collector._read_json(STATUS_PATH), 'status': 'retained',
                       'checked_at': datetime.now().astimezone().isoformat(timespec='seconds'),
@@ -147,6 +149,10 @@ def refresh() -> dict:
     return report
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     report = refresh()
     print(json.dumps(report, ensure_ascii=False), flush=True)

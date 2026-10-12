@@ -7,7 +7,6 @@ import json
 import gzip
 import os
 import re
-import shutil
 import sqlite3
 import threading
 import time
@@ -73,18 +72,21 @@ def read_tables(path, tables):
 class InventoryStatusService:
     def __init__(self, cache=None):
         configured=os.getenv('DDOKDDAK_INVENTORY_STATUS_DATA_DIR','').strip()
-        self.cache=Path(cache or configured or (DATA_CENTER_DIR/'inventory-status'))
+        self.cache=Path(cache or configured or (DATA_CENTER_DIR/'backward-v1/inventory-status'))
         self.cache.mkdir(parents=True,exist_ok=True)
-        legacy=DATA_DIR/'inventory-status'
-        if cache is None and self.cache.resolve()!=legacy.resolve() and legacy.exists():
-            # Installed updates replace application files, so operational data
-            # lives in the shared data root. Migrate old local files once and
-            # never overwrite a newer persistent snapshot or API config.
-            for source in legacy.rglob('*'):
-                relative=source.relative_to(legacy);target=self.cache/relative
-                if source.is_dir():target.mkdir(parents=True,exist_ok=True)
-                elif not target.exists():
-                    target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
+        if cache is None and not configured:
+            # Carry only user API configuration across the Plan -> Backward
+            # boundary. Old calculated results and warehouse snapshots must
+            # never satisfy the first Backward collection cycle.
+            target=self.cache/'hydration_api_config.json'
+            for legacy in (DATA_CENTER_DIR/'inventory-status', DATA_DIR/'inventory-status'):
+                source=legacy/'hydration_api_config.json'
+                if source.is_file() and not target.exists():
+                    try:
+                        with target.open('xb') as stream:
+                            stream.write(source.read_bytes())
+                    except FileExistsError:
+                        pass
         self.view_cache=self.cache/'view-snapshots';self.view_cache.mkdir(parents=True,exist_ok=True)
         self._memory_results=collections.OrderedDict()
         self._stock_cache_signature=None;self._stock_cache_value=None

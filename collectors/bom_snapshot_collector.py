@@ -446,6 +446,10 @@ def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, 
     return result
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     parser = argparse.ArgumentParser(description="제품·BOM 기준정보 중앙 수집")
     parser.add_argument("--force", action="store_true")

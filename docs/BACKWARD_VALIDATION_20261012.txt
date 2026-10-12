@@ -1,0 +1,66 @@
+생산3팀 v2.8.3 Backward 전환 검증 — 2026-10-12
+
+결론: 격리 개발판에 전환 구현 완료. 실제 API 수집, 실시간 계산, 화면 및 기능 회귀 검증을 통과함. 운영 배포·설치판 교체·운영 데이터 전환은 수행하지 않음.
+
+개발 위치: C:\Users\심민식\Documents\ChatGPT\관별 신규 프로그램(aps)\production3-backward-validation
+원본 위치: C:\Users\심민식\Documents\ChatGPT\관별 신규 프로그램(aps)\production3-v2.8.2
+기준 커밋: 46e1022 (APP_VERSION 2.8.3)
+개발 브랜치: codex/production3-backward-validation
+테스트 데이터: C:\Users\심민식\Documents\ChatGPT\관별 신규 프로그램(aps)\production3-backward-validation\validation-data
+테스트 GUI: python scripts/backward_preview.py
+전체 화면 재검증: python scripts/backward_preview.py --verify-tabs
+
+구현
+- 필요수량은 /api/aps-backward-plan.backward_qty만 사용. aps_plan.plan_qty에 호환 매핑. 입수 재곱셈 없음.
+- 대상 공정 10/20/45/55/80. 85 포장 제외. eff_fac_cd=04 및 정규화한 제품명코드+공정의 기계등록으로 S관 확인.
+- 전체 Plan을 수요별 보조정보로만 사용. 날짜/설비 반복행으로 수량 중복 연결하지 않음. 원본 사이트·공장 근거·원천 회차·보조정보 출처 보존.
+- Plan 미연결 9수요/27행 유지. 동일 수주·순번의 유일 공통값으로 제품명/입수를 보완하고 정확한 수주+순번+품목코드의 수출/국내 상세로 수량 보완.
+- 수출 od_qty는 PCS: pack_qty로 나눠 호환 demand_qty 저장. 연결된 24개 규격을 기존 Plan과 대조해 단위를 확인. 국내는 re_pack_qty 사용 및 re_pcs_qty와 대조.
+- 일반 이니셜의 고객명 누락 0. 안전(국내)/안전(해외)/PB 고객명 공란 유지. 이들 표시는 고객 누락으로 판정하지 않음.
+- 출처 식별자로 동일 시각의 Plan→Backward도 재수집/초기화. 대시보드도 출처가 다른 과거 계산을 사용하지 않음.
+- 아웃바운드 D 상태와 전체 응답 시각·행 수를 수집 전후 대조. WIP는 확인된 원천 스냅샷과 일치해야 함. 다음 Backward 회차에 이전 WIP가 그대로 남아 있으면 대기. WIP/Backward 단순 시각 대소 비교에 의존하지 않음.
+- 미확인 오더수량은 0으로 바꾸지 않고 화면에 미확인 표시. 판매품명과 공정품명을 별도로 보완.
+- 기존 소스의 QSS 미완결 선택자 제거. 큰 필요수량의 PCS 단위가 잘리지 않도록 공정 KPI 숫자 글자 크기만 21→19px 조정.
+
+실제 데이터 검증
+- Backward 전체 75,887행 중 S관 대상 34,626행, 7,112수요. 원본 사이트 공란 2,544행 정상 포함.
+- 보완 후 오더수량 미확인 0행, 일반 이니셜 고객명 누락 0행, 공정품명 누락 0행.
+- 원천 회차 20261012-0729, Backward 07:26:00, Plan 07:29:16, WIP 07:43:55.
+- 실제 WIP·5개 창고·생산실적 수집 완료. 실시간 계산 34,626행, 실적 차감 140,439 PCS, 완료행 40행.
+- 각 공정의 원본 = 차감 + 잔량, 음수 없음, SQLite integrity_check 정상.
+- 동일 완료실적 재계산 결과가 행 단위로 동일. 동일 시각의 원천 변경 재초기화 후에도 결과가 동일하여 이중 차감 없음.
+- 변경 없는 실제 원천 감시 결과 changed=false 확인.
+
+공정 / Backward PCS / 실적차감 PCS / 잔량 PCS
+10 / 21,250,230 / 17,744 / 21,232,486
+20 / 18,573,711 / 32,629 / 18,541,082
+45 / 22,044,512 / 38,604 / 22,005,908
+55 / 21,267,100 / 21,073 / 21,246,027
+80 / 21,132,480 / 30,389 / 21,102,091
+
+회귀 검증
+- unittest 140개 통과. 원천 변경, WIP 대기/시각 역전, 수량 단위, 공장 충돌, 중복 조인, LOT 우선순위, 대시보드, BOM 복사, 재고 검색, 엑셀 등 포함.
+- GUI 22개 페이지 순회 및 화면 저장. BOM 내부 5개 탭 순회. GUI 예외 없음.
+- 공정/실시간의 전체 및 5공정에서 검색, 시장 분류, 초기화, 코드 표시, 오더수량 표시 확인.
+- 공정 6개, 실시간 6개, LOT 5개(수화 단일/분할 포함), 재고 1개: 엑셀 18개 생성 후 openpyxl로 재열기 검증.
+- BOM T1296/P1296/P3015 검색 및 구성 트리 조회 확인. 기존 가로/세로 복사 테스트 통과.
+- 재고 92제품/9,271규격. 이니셜, 제품코드, 품명, 쉼표 OR 검색 확인.
+
+남은 확인 및 범위
+- 재고 R/Q 연결 미확인 44규격이 존재하며 모두 현재 부족수량 0. 재고 수량은 미확인으로 유지. 목록: validation-artifacts/unmapped-inventory.json.
+- 다음 실제 서버 APS 회차가 아직 도래하지 않아 미래 실제 회차 전환 관찰은 하지 않음. 회차 전환은 모의/저장자료 재생으로 검증.
+- 상태 API의 RUN은 Plan+Backward 완료 판정이며 WIP에 같은 run_key가 직접 제공되지는 않음. 현재는 상태에 표시된 WIP 시각과 5개 창고 응답을 대조하고, 이전 Backward 계산이 있으면 새 WIP가 확인될 때까지 대기. 최초 설치 시에도 완전한 회차 귀속 보장이 필요하면 서버가 WIP의 run_key를 제공해야 함.
+- 설정 화면은 렌더링만 확인. 운영 등록정보 변경, 업데이트 배포, 설치판 업그레이드, 인쇄/외부 PDF 프로그램 실행은 이번 범위에서 실행하지 않음.
+- 검증 GUI는 관리 서버 접속 보고 및 자동 수집/업데이트를 실행하지 않는 검토 런처. production entry point의 권한 확인 로직은 변경하지 않음.
+
+근거 파일
+validation-tests.log
+validation-artifacts/data-verification.json
+validation-artifacts/feature-verification.json
+validation-artifacts/gui/report.json
+validation-artifacts/gui/*.png
+validation-artifacts/excel/*.xlsx
+validation-data/process-status/raw_api/*.json.gz
+validation-data/inventory-status/refresh_status.json
+
+GUI 실행 상태: 검증 창 실행 중. Windows 자동 전면 활성화는 2회 모두 'failed to activate captured window' 오류. 앱 자체 22개 화면 렌더링 및 기능 검증은 성공했으며 작업표시줄의 '생산3팀 v2.8.3 · Backward 전환 검증 · 격리 데이터' 창에서 직접 검토 가능.

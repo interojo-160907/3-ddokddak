@@ -21,11 +21,11 @@ STATUS_PATH = DATA_ROOT / "settings" / "cleanup_status.json"
 RETENTION_POLICIES = (
     (DATA_ROOT / "bom" / "raw_api", "bom_api_*.json.gz", 3),
     (DATA_ROOT / "bom" / "backup", "product_reference_before_*.sqlite", 2),
-    (DATA_ROOT / "process-status" / "raw_api", "aps_s_factory_*.json.gz", 3),
-    (DATA_ROOT / "process-status" / "backup", "aps_process_status_before_*.sqlite", 2),
+    (DATA_ROOT / "backward-v1/process-status" / "raw_api", "aps_s_factory_*.json.gz", 3),
+    (DATA_ROOT / "backward-v1/process-status" / "backup", "aps_process_status_before_*.sqlite", 2),
     (DATA_ROOT / "production-performance" / "raw_api", "production_*.json.gz", 7),
     (DATA_ROOT / "production-performance" / "backup", "production_performance_before_*.sqlite", 2),
-    (DATA_ROOT / "live-production-need" / "backup", "current_production_need_before_*.sqlite", 2),
+    (DATA_ROOT / "backward-v1/live-production-need" / "backup", "current_production_need_before_*.sqlite", 2),
     (APP_ROOT / "logs", "*", 10),
 )
 
@@ -64,9 +64,9 @@ def _remove_stale_temporary_files() -> tuple[int, int]:
     cutoff = datetime.now().timestamp() - 24 * 60 * 60
     for directory in (
         DATA_ROOT / "bom",
-        DATA_ROOT / "process-status",
+        DATA_ROOT / "backward-v1/process-status",
         DATA_ROOT / "production-performance",
-        DATA_ROOT / "live-production-need",
+        DATA_ROOT / "backward-v1/live-production-need",
     ):
         if not directory.is_dir():
             continue
@@ -132,6 +132,10 @@ def cleanup() -> dict[str, Any]:
     return result
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     print(json.dumps(cleanup(), ensure_ascii=False, indent=2))
     return 0

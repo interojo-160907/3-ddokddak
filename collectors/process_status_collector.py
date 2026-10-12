@@ -17,11 +17,12 @@ if str(APP_ROOT) not in sys.path:
     sys.path.insert(0, str(APP_ROOT))
 from services.erp_api_client import request_json
 from services.data_location import resolve_data_root
+from services.backward_source import SOURCE, adapt, outbound_state, validate_payload, supplement_order_quantities
 
 DATA_DIR = Path(
     os.getenv(
         "DDOKDDAK_PROD3_PROCESS_DATA_DIR",
-        str(resolve_data_root() / "process-status"),
+        str(resolve_data_root() / "backward-v1/process-status"),
     )
 )
 DB_PATH = DATA_DIR / "aps_process_status.sqlite"
@@ -30,7 +31,7 @@ BACKUP_DIR = DATA_DIR / "backup"
 RAW_DIR = DATA_DIR / "raw_api"
 BASE_URL = "https://plan.interojo.net"
 FACTORY = "S관(3공장)"
-PROCESS_CODES = ("10", "20", "45", "55", "80", "85")
+PROCESS_CODES = ("10", "20", "45", "55", "80")
 SAFETY_DEMAND_TYPES = {"안전", "안전(국내)", "안전(해외)", "안전재고(국내)", "안전재고(해외)"}
 FIELDS = (
     "plan_date", "oper_id", "res_id", "res_site_id", "demand_id",
@@ -182,33 +183,24 @@ def _initialize(connection: sqlite3.Connection) -> None:
 
 
 def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
-    meta_before = _request("/api/aps-plan/meta", {}, api_key, timeout)
-    if int(meta_before.get("total_count") or 0) <= 0:
-        raise RuntimeError("APS 원천 갱신 중이거나 데이터가 없습니다.")
-    payload = _request(
-        "/api/aps-plan",
-        {"site": "S관", "limit": 0, "prompt_context": "똑딱이 생산3팀 세부 진행 현황 수집"},
-        api_key,
-        timeout,
-    )
-    meta_after = _request("/api/aps-plan/meta", {}, api_key, timeout)
-    before_signature = (meta_before.get("last_refreshed_at"), int(meta_before.get("total_count") or 0))
-    after_signature = (meta_after.get("last_refreshed_at"), int(meta_after.get("total_count") or 0))
-    payload_signature = (payload.get("source_refreshed_at"), int(payload.get("source_total_count") or 0))
-    if before_signature != after_signature or payload_signature != after_signature:
-        raise RuntimeError("APS 수집 도중 원천 데이터가 갱신되었습니다. 잠시 후 다시 실행해 주세요.")
-    if payload.get("truncated"):
-        raise RuntimeError("APS 응답이 일부만 반환되었습니다.")
+    before = outbound_state(_request("/api/aps-outbound-status", {"limit": 0}, api_key, timeout))
+    payload = _request("/api/aps-backward-plan", {"limit": 0}, api_key, timeout)
+    plan = _request("/api/aps-plan", {"limit": 0}, api_key, timeout)
+    arrange = _request("/api/aps-arrange", {"limit": 0}, api_key, timeout)
+    if arrange.get("truncated") or not arrange.get("rows"):
+        raise RuntimeError("기계등록 전체 정보를 확인할 수 없습니다.")
+    meta_after = outbound_state(_request("/api/aps-outbound-status", {"limit": 0}, api_key, timeout))
+    if before != meta_after:
+        raise RuntimeError("APS 수집 도중 아웃바운드 회차가 변경되었습니다.")
+    validate_payload(payload, meta_after, "backward")
+    validate_payload(plan, meta_after, "plan")
     source_rows = list(payload.get("rows") or [])
-    rows = [
-        row for row in source_rows
-        if str(row.get("res_site_id") or "").strip() == FACTORY
-        and str(row.get("oper_id") or "").strip() in PROCESS_CODES
-    ]
+    rows = adapt(source_rows, plan["rows"], arrange["rows"])
+    supplements, supplement_errors = supplement_order_quantities(rows, _request, api_key, timeout)
     now = datetime.now().astimezone()
     stamp = now.strftime("%Y%m%d_%H%M%S")
     raw_path = RAW_DIR / f"aps_s_factory_{stamp}.json.gz"
-    _write_raw(raw_path, {"collected_at": now.isoformat(timespec="seconds"), "factory": FACTORY, "meta": meta_after, "payload": payload})
+    _write_raw(raw_path, {"collected_at": now.isoformat(timespec="seconds"), "factory": FACTORY, "meta": meta_after, "payload": payload, "plan_metadata": plan, "arrange": arrange, "supplements": supplements})
     if not rows:
         previous = _read_status(STATUS_PATH)
         if DB_PATH.exists() and int(previous.get("stored_rows") or 0) > 0:
@@ -234,6 +226,16 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
     connection = sqlite3.connect(temporary_db)
     try:
         _initialize(connection)
+        connection.execute("CREATE TABLE source_provenance (id INTEGER PRIMARY KEY CHECK(id=1), source_kind TEXT, source_identity TEXT, run_key TEXT, backward_at TEXT, plan_at TEXT, wip_at TEXT, payload_json TEXT)")
+        connection.execute("INSERT INTO source_provenance VALUES (1,?,?,?,?,?,?,?)", (
+            SOURCE, meta_after["source_identity"], meta_after["run_key"], meta_after["backward_at"],
+            meta_after["plan_at"], meta_after["wip_at"], json.dumps(meta_after, ensure_ascii=False)))
+        connection.execute("CREATE TABLE backward_mapping (aps_id INTEGER PRIMARY KEY, original_site TEXT, effective_factory TEXT, factory_basis TEXT, metadata_source TEXT, demand_qty_status TEXT, original_json TEXT)")
+        connection.executemany("INSERT INTO backward_mapping VALUES (?,?,?,?,?,?,?)", [
+            (i, row["_backward"].get("res_site_id"), row["_backward"].get("eff_fac_cd"),
+             row["_backward"].get("fac_basis"), row["_metadata"]["source"],
+             row["_metadata"]["demand_qty_status"], json.dumps(row["_backward"], ensure_ascii=False))
+            for i, row in enumerate(rows, 1)])
         marks = ",".join("?" for _ in range(len(FIELDS) + 1))
         connection.executemany(
             f"INSERT INTO aps_plan ({','.join(FIELDS)},payload_json) VALUES ({marks})",
@@ -263,6 +265,9 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
     _prune(RAW_DIR, "aps_s_factory_*.json.gz", 14)
     result = {
         "status": "success", "database": str(DB_PATH), "factory": FACTORY,
+        **meta_after,
+        "unknown_order_qty_rows": sum(row.get("demand_qty") is None for row in rows),
+        "supplement_errors": supplement_errors,
         "source_rows": len(source_rows), "stored_rows": len(rows), "order_count": order_count,
         "source_refreshed_at": str(payload.get("source_refreshed_at") or ""),
         "refreshed_at": now.isoformat(timespec="seconds"), "raw_snapshot": str(raw_path),
@@ -272,6 +277,10 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
     return result
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     parser = argparse.ArgumentParser(description="생산3팀 S관 세부 진행 현황 스냅샷 수집")
     parser.add_argument("--api-key", default="")

@@ -70,7 +70,8 @@ def run_collector_mode(arguments: list[str]) -> int:
     exit_code = 0
     try:
         sys.argv = [collector_name, *arguments[1:]]
-        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+        from services.collection_lock import collection_lock
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer), collection_lock():
             if collector_name != "data_retention_cleanup":
                 from services.data_location import resolve_data_root
                 from services.recovery_backup import ensure_recovery_backup

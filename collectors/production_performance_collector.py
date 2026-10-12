@@ -232,15 +232,10 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
     start = history_start if full_refresh else end - timedelta(days=6)
     # 매일 07시 이후 첫 수집은 전월~당일 전체를 교체해 저장→확인·폐기
     # 상태 변경을 반영한다. 같은 날 이후 수집은 최근 7일만 갱신한다.
-    chunks = _month_chunks(start, end) if full_refresh else _simple_day_chunks(start, end)
-    if full_refresh:
-        payloads = [
-            payload
-            for chunk_start, chunk_end in chunks
-            for payload in _fetch_complete_range(chunk_start, chunk_end, api_key, timeout)
-        ]
-    else:
-        payloads = bounded_map(lambda chunk: _fetch(chunk[0], chunk[1], api_key, timeout), chunks)
+    # Full means the entire retained period, not one oversized monthly query.
+    # Day-sized requests avoid repeating a timed-out month on every startup.
+    chunks = _simple_day_chunks(start, end)
+    payloads = bounded_map(lambda chunk: _fetch(chunk[0], chunk[1], api_key, timeout), chunks)
     source_rows = [row for payload in payloads for row in list(payload.get("rows") or [])]
     rows = [
         row for row in source_rows
@@ -344,6 +339,10 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
     return result
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     parser = argparse.ArgumentParser(description="생산3팀 당월·전월 생산실적 스냅샷 수집")
     parser.add_argument("--api-key", default="")

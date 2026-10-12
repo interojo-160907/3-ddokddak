@@ -40,6 +40,12 @@ foreach ($relative in @('inventory-status\hydration_instructions.json', 'invento
 Install-TestVersion $Installer
 $afterRoot = (Get-ItemProperty -LiteralPath $registry).DataRoot
 if ($beforeRoot -ne $afterRoot) { throw 'Upgrade changed the data root.' }
+if ([version]$ExpectedVersion -ge [version]'2.8.4') {
+    foreach ($directory in @('backward-v1\process-status\snapshot','backward-v1\live-production-need\snapshot','backward-v1\inventory-status','backward-v1\settings')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $afterRoot $directory))) { throw "Missing Backward directory: $directory" }
+    }
+    if (Test-Path -LiteralPath (Join-Path $afterRoot 'backward-v1\settings\version_collection_bootstrap.json')) { throw 'Initial full collection was not requested.' }
+}
 if ((Get-Content -LiteralPath $sentinel -Raw).Trim() -ne 'existing-user-data-must-remain') { throw 'Upgrade lost user data.' }
 foreach ($directory in @('live-production-need\snapshot','bom\snapshot','process-status\snapshot','production-performance\snapshot','settings','안전모드')) {
     if (-not (Test-Path -LiteralPath (Join-Path $afterRoot $directory))) { throw "Missing data directory: $directory" }

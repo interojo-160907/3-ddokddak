@@ -13,10 +13,10 @@ from services import safe_mode
 
 
 ROOT = DATA_CENTER_DIR
-APS_DB = ROOT / "process-status" / "aps_process_status.sqlite"
-APS_STATUS = ROOT / "process-status" / "snapshot" / "refresh_status.json"
-LIVE_DB = ROOT / "live-production-need" / "current_production_need.sqlite"
-LIVE_STATUS = ROOT / "live-production-need" / "snapshot" / "refresh_status.json"
+APS_DB = ROOT / "backward-v1/process-status" / "aps_process_status.sqlite"
+APS_STATUS = ROOT / "backward-v1/process-status" / "snapshot" / "refresh_status.json"
+LIVE_DB = ROOT / "backward-v1/live-production-need" / "current_production_need.sqlite"
+LIVE_STATUS = ROOT / "backward-v1/live-production-need" / "snapshot" / "refresh_status.json"
 PRODUCTION_DB = ROOT / "production-performance" / "production_performance.sqlite"
 PRODUCTION_STATUS = ROOT / "production-performance" / "snapshot" / "refresh_status.json"
 BOM_DB = ROOT / "bom" / "product_reference.sqlite"
@@ -54,13 +54,15 @@ def _live_cycle_matches() -> bool:
     """실시간 계산이 현재 APS 회차를 기준으로 만들어졌는지 확인한다."""
     if safe_mode.active() or not LIVE_DB.is_file():
         return False
-    aps_cycle = str(_status(safe_mode.status_path(APS_STATUS)).get("source_refreshed_at") or "").strip()
+    aps_status = _status(safe_mode.status_path(APS_STATUS))
+    aps_cycle = str(aps_status.get("source_refreshed_at") or "").strip()
     live_status = _status(LIVE_STATUS)
     live_cycle = str(live_status.get("aps_source_refreshed_at") or "").strip()
     return bool(
         aps_cycle
         and live_cycle
         and aps_cycle == live_cycle
+        and aps_status.get("source_identity", "") == live_status.get("source_identity", "")
         and str(live_status.get("status") or "") == "success"
     )
 

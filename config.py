@@ -9,7 +9,7 @@ from services.data_location import resolve_data_root
 
 APP_NAME = "똑딱이 생산3팀"
 APP_DISPLAY_NAME = "똑딱이 생산3팀 전용"
-APP_VERSION = "2.8.3"
+APP_VERSION = "2.8.4"
 APP_USER_MODEL_ID = (
     "Ddokddak.ProductionTeam3" if getattr(sys, "frozen", False)
     else "Ddokddak.ProductionTeam3.Source"
@@ -38,17 +38,18 @@ def collection_directories(root: Path) -> tuple[Path, ...]:
         root / "bom" / "snapshot",
         root / "bom" / "backup",
         root / "bom" / "raw_api",
-        root / "process-status" / "snapshot",
-        root / "process-status" / "backup",
-        root / "process-status" / "raw_api",
+        root / "backward-v1/process-status" / "snapshot",
+        root / "backward-v1/process-status" / "backup",
+        root / "backward-v1/process-status" / "raw_api",
         root / "production-performance" / "snapshot",
         root / "production-performance" / "backup",
         root / "production-performance" / "raw_api",
-        root / "live-production-need" / "snapshot",
-        root / "live-production-need" / "backup",
-        root / "inventory-status",
-        root / "inventory-status" / "snapshots",
-        root / "inventory-status" / "view-snapshots",
+        root / "backward-v1/live-production-need" / "snapshot",
+        root / "backward-v1/live-production-need" / "backup",
+        root / "backward-v1/inventory-status",
+        root / "backward-v1/inventory-status" / "snapshots",
+        root / "backward-v1/inventory-status" / "view-snapshots",
+        root / "backward-v1" / "settings",
         root / "settings",
         root / "안전모드",
     )

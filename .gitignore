@@ -16,3 +16,8 @@ installer/compile-*.log
 *.tmp
 .env
 .env.*
+
+validation-data/
+validation-artifacts/
+unit-test-data/
+validation-*.log

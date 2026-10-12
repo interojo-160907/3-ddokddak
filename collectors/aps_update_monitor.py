@@ -6,9 +6,9 @@ import os
 from typing import Any
 
 try:
-    from collectors.process_status_collector import STATUS_PATH, _request, refresh
+    from collectors.process_status_collector import DB_PATH, STATUS_PATH, _request, refresh
 except ImportError:
-    from process_status_collector import STATUS_PATH, _request, refresh
+    from process_status_collector import DB_PATH, STATUS_PATH, _request, refresh
 
 
 def _local_status() -> dict[str, Any]:
@@ -20,14 +20,18 @@ def _local_status() -> dict[str, Any]:
 
 def check_and_refresh(api_key: str = "", timeout: int = 60) -> dict[str, Any]:
     local = _local_status()
-    source = _request("/api/aps-plan/meta", {}, api_key, timeout)
-    source_count = int(source.get("total_count") or 0)
-    source_refreshed_at = str(source.get("last_refreshed_at") or "")
-    if source_count <= 0 or not source_refreshed_at:
-        raise RuntimeError("APS 원천 갱신 중이거나 메타정보가 없습니다.")
-
+    from services.backward_source import outbound_state
+    source = outbound_state(_request("/api/aps-outbound-status", {"limit": 0}, api_key, timeout))
+    source_count = source["backward_count"]
+    source_refreshed_at = source["backward_at"]
     unchanged = (
-        str(local.get("source_refreshed_at") or "") == source_refreshed_at
+        DB_PATH.is_file()
+        and local.get("source_identity") == source["source_identity"]
+        and local.get("backward_count") == source["backward_count"]
+        and local.get("plan_count") == source["plan_count"]
+        and local.get("plan_at") == source["plan_at"]
+        and local.get("wip_at") == source["wip_at"]
+        and local.get("wip_count") == source["wip_count"]
         and local.get("status") == "success"
     )
     if unchanged:
@@ -42,6 +46,10 @@ def check_and_refresh(api_key: str = "", timeout: int = 60) -> dict[str, Any]:
     return {**result, "changed": True}
 
 
+from services.collection_lock import serialized_collection
+
+
+@serialized_collection
 def main() -> int:
     parser = argparse.ArgumentParser(description="APS 원천 갱신 감시 및 S관 스냅샷 자동 교체")
     parser.add_argument("--api-key", default="")

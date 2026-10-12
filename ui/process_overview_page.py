@@ -165,8 +165,8 @@ class RowTableModel(QAbstractTableModel):
         if column == "오더 수량":
             value = row.get("오더수량PCS", None)
             if role == Qt.ToolTipRole:
-                return "APS 수요 × 포장단위 = PCS · 수주 순번별 중복 제거 · 실적 차감 전"
-            if value is None and role == Qt.DisplayRole: return "—"
+                return "규격별 오더수량 미확인 · 다른 규격의 수량을 대신 사용하지 않습니다." if value is None else "규격별 수요 × 포장단위 = PCS · 수주 순번별 중복 제거 · 실적 차감 전"
+            if value is None and role == Qt.DisplayRole: return "미확인"
         if role == Qt.DisplayRole:
             return format_number(value) if isinstance(value, (int, float)) else str(value or "")
         if role == Qt.TextAlignmentRole and isinstance(value, (int, float)):

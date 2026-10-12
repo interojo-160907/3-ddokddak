@@ -40,7 +40,7 @@ def check_collection_api_details(timeout: float = 8.0) -> dict[str, dict]:
     today = date.today().isoformat()
     probes = {
         "bom": ("/api/product-names", {"limit": 1}),
-        "aps": ("/api/aps-plan/meta", {}),
+        "aps": ("/api/aps-backward-plan", {"limit": 1}),
         "production": (
             "/api/production-performance",
             {"date_from": today, "date_to": today, "limit": 1},

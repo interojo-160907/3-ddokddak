@@ -64,17 +64,21 @@ from config import APP_DISPLAY_NAME, APP_NAME, APP_VERSION, ASSET_DIR, DATA_CENT
 from services.collection_health import recovered, collection_ready, header_status
 
 INVENTORY_STATUS_DATA_DIR = Path(
-    os.getenv("DDOKDDAK_INVENTORY_STATUS_DATA_DIR", str(DATA_CENTER_DIR / "inventory-status"))
+    os.getenv("DDOKDDAK_INVENTORY_STATUS_DATA_DIR", str(DATA_CENTER_DIR / "backward-v1/inventory-status"))
 )
 
 
 def _version_bootstrap_ready(full_report: dict) -> bool:
-    """A base pass is complete even when one live warehouse needs retry."""
+    """Only a fully collected cycle completes first-install initialization."""
+    return _version_base_ready(full_report) and (full_report['results'].get('live') or {}).get('status') == 'success'
+
+
+def _version_base_ready(full_report: dict) -> bool:
     results = full_report.get("results") or {}
     required = ("bom", "aps", "production")
     return bool(full_report.get("completed_at")) and all(
         (results.get(key) or {}).get("status") == "success" for key in required
-    ) and (results.get('live') or {}).get('status') in {'success', 'partial'}
+    )
 
 
 def _collector_executable() -> str:
@@ -1359,13 +1363,13 @@ class MainWindow(QMainWindow):
                 return mode, safe_mode.prepare(asset)
             if current:
                 import sqlite3
-                automatic = DATA_CENTER_DIR / "process-status" / "aps_process_status.sqlite"
+                automatic = DATA_CENTER_DIR / "backward-v1/process-status" / "aps_process_status.sqlite"
                 with closing(sqlite3.connect(f"file:{automatic.as_posix()}?mode=ro", uri=True)) as con:
                     if not con.execute("SELECT COUNT(*) FROM aps_plan").fetchone()[0]:
                         raise RuntimeError("자동모드 APS 데이터가 비어 있습니다. 안전모드를 유지합니다.")
-                aps = self._read_refresh_status(DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json")
-                live = self._read_refresh_status(DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json")
-                if not live.get("aps_source_refreshed_at") or not (DATA_CENTER_DIR / "live-production-need" / "current_production_need.sqlite").is_file():
+                aps = self._read_refresh_status(DATA_CENTER_DIR / "backward-v1/process-status" / "snapshot" / "refresh_status.json")
+                live = self._read_refresh_status(DATA_CENTER_DIR / "backward-v1/live-production-need" / "snapshot" / "refresh_status.json")
+                if not live.get("aps_source_refreshed_at") or not (DATA_CENTER_DIR / "backward-v1/live-production-need" / "current_production_need.sqlite").is_file():
                     raise RuntimeError("자동모드 복귀 대기: 기존 실시간 계산 데이터가 없습니다.")
                 # Restore normal behavior, including its existing WIP-wait indicator.
                 # Never relabel an older live calculation as the latest APS cycle.
@@ -1435,17 +1439,17 @@ class MainWindow(QMainWindow):
         return {
             "inventory": self._database_signature(INVENTORY_STATUS_DATA_DIR / 'refresh_status.json'),
             "bom": self._database_signature(DATA_CENTER_DIR / "bom" / "product_reference.sqlite"),
-            "aps": self._database_signature(DATA_CENTER_DIR / "process-status" / "aps_process_status.sqlite"),
+            "aps": self._database_signature(DATA_CENTER_DIR / "backward-v1/process-status" / "aps_process_status.sqlite"),
             "production": self._database_signature(DATA_CENTER_DIR / "production-performance" / "production_performance.sqlite"),
-            "live": self._database_signature(Path(os.getenv('DDOKDDAK_PROD3_LIVE_NEED_DATA_DIR',str(DATA_CENTER_DIR / 'live-production-need'))) / "current_production_need.sqlite"),
+            "live": self._database_signature(Path(os.getenv('DDOKDDAK_PROD3_LIVE_NEED_DATA_DIR',str(DATA_CENTER_DIR / 'backward-v1/live-production-need'))) / "current_production_need.sqlite"),
         }
 
     def _current_data_status_signatures(self) -> dict[str, tuple[int, int] | None]:
         return {
             "bom": self._database_signature(DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json"),
-            "aps": self._database_signature(DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json"),
+            "aps": self._database_signature(DATA_CENTER_DIR / "backward-v1/process-status" / "snapshot" / "refresh_status.json"),
             "production": self._database_signature(DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
-            "live": self._database_signature(DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json"),
+            "live": self._database_signature(DATA_CENTER_DIR / "backward-v1/live-production-need" / "snapshot" / "refresh_status.json"),
             "inventory": self._database_signature(INVENTORY_STATUS_DATA_DIR / "refresh_status.json"),
         }
 
@@ -4902,7 +4906,7 @@ class MainWindow(QMainWindow):
             ),
             (
                 "데이터 수집 및 갱신",
-                "BOM 전체, S관 APS 진행현황, 최근 7일 생산실적을 순서대로 갱신합니다. 최초 설치만 전월~금일을 수집합니다.",
+                "BOM·Backward APS·전월~금일 생산실적을 새로 받고, WIP·창고·수화 지시와 재고 계산을 갱신합니다.",
                 "상태 확인 중",
                 "전체 데이터 수집",
                 self._start_full_data_refresh,
@@ -5045,7 +5049,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "실행 시 누락된 수집을 백그라운드에서 보완하고, 켜진 동안 선택 주기로 갱신합니다. APS는 원천 변경 시에만 S관 DB를 교체합니다."
+            "설치·업데이트 후 첫 실행은 전체 재수집합니다. 이후 선택 주기로 갱신하며, APS 자동 수집은 Backward 원천 변경 시 갱신합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5062,7 +5066,7 @@ class MainWindow(QMainWindow):
         self.collection_controls: dict[str, dict[str, QWidget]] = {}
         definitions = (
             ("bom", "BOM", "제품명·BOM 전체 스냅샷", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
-            ("aps", "S관 APS", "원천 변경 확인 후 S관만 갱신", (("중지", 0), ("1분 (기본)", 1), ("5분", 5), ("10분", 10), ("30분", 30), ("1시간", 60))),
+            ("aps", "S관 APS", "Backward 기준 · 수동 갱신은 재조회", (("중지", 0), ("1분 (기본)", 1), ("5분", 5), ("10분", 10), ("30분", 30), ("1시간", 60))),
             ("production", "생산실적", "07시 첫 전체 · 이후 최근 7일", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
             ("live", "WIP·실시간 실적 반영", "5개 WIP·생산실적·4개 표시 창고를 같은 회차로 계산", (("수동만", 0), ("30분", 30), ("1시간 (기본)", 60), ("2시간", 120), ("3시간", 180))),
             ("hydration", "수화 지시", "4개 표시 창고·실시간 실적과 동시에 수집 후 부족량 계산", (("실시간 갱신과 함께", 0),)),
@@ -5201,7 +5205,7 @@ class MainWindow(QMainWindow):
                 )
                 if inferred and key != inferred:
                     continue
-                folders = {"bom": "bom", "aps": "process-status", "production": "production-performance", "live": "live-production-need"}
+                folders = {"bom": "bom", "aps": "backward-v1/process-status", "production": "production-performance", "live": "backward-v1/live-production-need"}
                 if key in folders:
                     status = cls._read_refresh_status(DATA_CENTER_DIR / folders[key] / "snapshot" / "refresh_status.json")
                     if recovered(info, status):
@@ -5312,9 +5316,9 @@ class MainWindow(QMainWindow):
             return
         definitions = (
             ("bom", "BOM", DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json", ("product_rows", "bom_rows")),
-            ("aps", "APS", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json", ("stored_rows",)),
+            ("aps", "APS", DATA_CENTER_DIR / "backward-v1/process-status" / "snapshot" / "refresh_status.json", ("stored_rows",)),
             ("production", "생산실적", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json", ("stored_rows", "s_factory_rows")),
-            ("live", "WIP·실시간 실적", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json", ("remaining_rows", "evidence_rows")),
+            ("live", "WIP·실시간 실적", DATA_CENTER_DIR / "backward-v1/live-production-need" / "snapshot" / "refresh_status.json", ("remaining_rows", "evidence_rows")),
             ("hydration", "수화 지시", INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json", ("row_count", "product_count")),
         )
         parts = []
@@ -5471,19 +5475,20 @@ class MainWindow(QMainWindow):
         if hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
             return
         now = datetime.now()
-        bootstrap_path = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
+        bootstrap_path = DATA_CENTER_DIR / "backward-v1" / "settings" / "version_collection_bootstrap.json"
         bootstrap = self._read_refresh_status(bootstrap_path)
         if str(bootstrap.get("completed_version") or "") != APP_VERSION:
             attempted = self._collection_last_attempt.get("version_bootstrap")
             if attempted is None or (now - attempted) >= timedelta(minutes=5):
                 self._collection_last_attempt["version_bootstrap"] = now
-                self._start_data_collection("all", scheduled=True)
+                source = "live" if bootstrap.get("base_completed_version") == APP_VERSION else "all"
+                self._start_data_collection(source, scheduled=True)
             return
         definitions = (
             ("bom", DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json"),
-            ("aps", DATA_CENTER_DIR / "process-status" / "snapshot" / "refresh_status.json"),
+            ("aps", DATA_CENTER_DIR / "backward-v1/process-status" / "snapshot" / "refresh_status.json"),
             ("production", DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
-            ("live", DATA_CENTER_DIR / "live-production-need" / "snapshot" / "refresh_status.json"),
+            ("live", DATA_CENTER_DIR / "backward-v1/live-production-need" / "snapshot" / "refresh_status.json"),
         )
         hydration_snapshot = self._read_refresh_status(
             INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
@@ -5680,9 +5685,14 @@ class MainWindow(QMainWindow):
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         if source not in scripts:
             return
-        if source in {"all", "aps"} and hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
-            self.aps_monitor_process.kill()
-            self.aps_monitor_process.waitForFinished(1_000)
+        if hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
+            if not scheduled:
+                self.settings_data_status.setText("APS 원천 확인 중입니다. 완료 후 다시 갱신해 주세요.")
+            return
+        if hasattr(self, "data_cleanup_process") and self.data_cleanup_process.state() != QProcess.NotRunning:
+            if not scheduled:
+                self.settings_data_status.setText("데이터 정리 중입니다. 완료 후 다시 갱신해 주세요.")
+            return
         self._collection_last_attempt[source] = datetime.now()
         self._collection_active_source = source
         self._collection_started_at = None
@@ -5701,7 +5711,9 @@ class MainWindow(QMainWindow):
             )
             return
         process.setWorkingDirectory(str(ROOT_DIR))
-        program, arguments = _collector_process_command(scripts[source])
+        bootstrap = self._read_refresh_status(DATA_CENTER_DIR / "backward-v1/settings/version_collection_bootstrap.json")
+        force_full = source == "all" and (not scheduled or bootstrap.get("completed_version") != APP_VERSION)
+        program, arguments = _collector_process_command(scripts[source], *(["--full"] if force_full else []))
         process.setProgram(program)
         process.setArguments(arguments)
         process.started.connect(
@@ -5882,7 +5894,7 @@ class MainWindow(QMainWindow):
         captured = "\n".join(getattr(self, "_collection_live_output", []))
         if source == "all":
             batch_report = self._read_refresh_status(
-                DATA_CENTER_DIR / "settings" / "full_refresh_status.json"
+                DATA_CENTER_DIR / "backward-v1" / "settings" / "full_refresh_status.json"
             )
             outcomes = batch_report.get("results") if batch_report.get("completed_at") else None
             if isinstance(outcomes, dict):
@@ -5931,9 +5943,9 @@ class MainWindow(QMainWindow):
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
-        if source == "all":
+        if source in {"all", "live"}:
             full = self._read_refresh_status(
-                DATA_CENTER_DIR / "settings" / "full_refresh_status.json"
+                DATA_CENTER_DIR / "backward-v1" / "settings" / "full_refresh_status.json"
             )
             inventory = self._read_refresh_status(
                 INVENTORY_STATUS_DATA_DIR / "refresh_status.json"
@@ -5941,16 +5953,19 @@ class MainWindow(QMainWindow):
             hydration = self._read_refresh_status(
                 INVENTORY_STATUS_DATA_DIR / "hydration_instructions.json"
             )
+            if source == "live" and full.get("results"):
+                full["results"]["live"] = {"status": inventory.get("status", "missing")}
             bootstrap_ok = _version_bootstrap_ready(full)
-            if bootstrap_ok:
-                target = DATA_CENTER_DIR / "settings" / "version_collection_bootstrap.json"
+            if _version_base_ready(full):
+                target = DATA_CENTER_DIR / "backward-v1" / "settings" / "version_collection_bootstrap.json"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 temporary = target.with_suffix(".tmp")
                 temporary.write_text(
                     json.dumps(
                         {
-                            "completed_version": APP_VERSION,
-                            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                            "completed_version": APP_VERSION if bootstrap_ok else "",
+                            "base_completed_version": APP_VERSION,
+                            "completed_at": datetime.now().astimezone().isoformat(timespec="seconds") if bootstrap_ok else "",
                             "cycle_id": inventory.get("cycle_id", ""),
                             "inventory_status": inventory.get("status", "missing"),
                             "hydration_status": hydration.get("status", "missing"),
