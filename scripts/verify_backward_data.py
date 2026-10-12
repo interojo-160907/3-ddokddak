@@ -93,4 +93,3 @@ report["inventory"] = {k:v for k,v in InventoryStatusService().build({}).items()
 report["dashboard_available"] = DashboardService().load()["available"]
 (ARTIFACTS / "data-verification.json").write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding="utf-8")
 print(json.dumps(report,ensure_ascii=False,indent=2))
-
