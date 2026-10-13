@@ -5757,9 +5757,8 @@ class MainWindow(QMainWindow):
             f"{labels.get(source, source)} 수집 중입니다. 프로그램을 종료하지 마세요."
         )
         self.collection_elapsed_timer.start(1_000)
-        self.collection_watchdog_timer.start(
-            600_000 if source == "all" else 480_000 if source == "live" else 300_000
-        )
+        from services.collection_timeouts import collection_limit_minutes
+        self.collection_watchdog_timer.start(collection_limit_minutes(source) * 60_000)
 
     def _set_collection_busy(self, busy: bool, source: str = "") -> None:
         self._collection_busy = busy
@@ -5830,7 +5829,8 @@ class MainWindow(QMainWindow):
         if process is None or process.state() == QProcess.NotRunning:
             return
         source = getattr(self, "_collection_active_source", "all")
-        limit_text = "10분" if source == "all" else "8분" if source == "live" else "5분"
+        from services.collection_timeouts import collection_limit_minutes
+        limit_text = f"{collection_limit_minutes(source)}분"
         self._abort_data_collection(
             f"수집 제한 시간({limit_text})을 초과하여 자동 중단했습니다.\n"
             "API 연결은 가능하지만 응답이 지연됐거나 수집기 처리가 정지했을 수 있습니다."
