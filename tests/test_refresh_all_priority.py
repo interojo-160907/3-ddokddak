@@ -7,6 +7,19 @@ from collectors import refresh_all
 
 
 class RefreshAllPriorityTests(unittest.TestCase):
+    def test_aps_failure_preserves_independent_collections_and_blocks_live(self):
+        with (
+            patch.object(refresh_all, 'refresh_aps', side_effect=RuntimeError('slow APS')),
+            patch.object(refresh_all, 'refresh_bom', return_value={'status':'success'}) as bom,
+            patch.object(refresh_all, 'refresh_production', return_value={'status':'success'}) as production,
+            patch.object(refresh_all, 'refresh_live') as live,
+            patch.object(refresh_all, '_write_result'), patch('builtins.print'),
+        ):
+            self.assertEqual(refresh_all.main(force_full=False), 1)
+        bom.assert_called_once()
+        production.assert_called_once()
+        live.assert_not_called()
+
     def test_base_sources_settle_before_live_inventory_calculation(self) -> None:
         order: list[str] = []
 
@@ -31,7 +44,7 @@ class RefreshAllPriorityTests(unittest.TestCase):
         ):
             self.assertEqual(refresh_all.main(), 0)
 
-        self.assertEqual(set(order[:3]), {"bom", "aps", "production"})
+        self.assertEqual(order[:3], ["aps", "bom", "production"])
         self.assertEqual(order[-1], "live")
 
 

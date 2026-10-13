@@ -24,6 +24,25 @@ def reply(status=200, payload=None, headers=None):
 
 
 class ErpApiClientTests(unittest.TestCase):
+    def test_large_snapshot_timeout_and_bounded_queue(self):
+        slots = Mock()
+        slots.acquire.return_value = True
+        with patch.object(client, '_slots', slots), patch.object(client.requests.Session, 'get', return_value=reply()) as get:
+            client.request_json('/api/aps-backward-plan', timeout=300)
+        self.assertEqual(get.call_args.kwargs['timeout'], (5, 300))
+        slots.acquire.assert_called_once_with(timeout=330)
+        slots.release.assert_called_once()
+
+    def test_queue_timeout_never_sends_a_request(self):
+        slots = Mock()
+        slots.acquire.return_value = False
+        with patch.object(client, '_slots', slots), patch.object(client.requests.Session, 'get') as get:
+            with self.assertRaises(client.ApiRequestError) as caught:
+                client.request_json('/api/production-performance', timeout=240)
+        self.assertEqual(caught.exception.kind, 'QueueTimeout')
+        get.assert_not_called()
+        slots.release.assert_not_called()
+
     def setUp(self):
         self.key = patch.object(credentials, "credential_value", return_value="saved-test-key")
         self.env = patch.dict(os.environ, {}, clear=True)
@@ -152,7 +171,8 @@ class ErpApiClientTests(unittest.TestCase):
             self.assertEqual(get.call_count,4)
             for call in get.call_args_list:
                 self.assertEqual(call.kwargs['headers']['X-API-Key'],'saved-plan')
-                self.assertLessEqual(call.kwargs['timeout'][1],60)
+                self.assertGreater(call.kwargs['timeout'][1],60)
+                self.assertLessEqual(call.kwargs['timeout'][1],300)
             self.assertEqual(api_health._headers()['X-API-Key'],'saved-plan')
 
 

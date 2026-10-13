@@ -126,7 +126,7 @@ def _request(
     attempts: int = 3,
     allow_truncated: bool = False,
 ) -> dict[str, Any]:
-    payload = request_json(endpoint, params, api_key=api_key, timeout=min(timeout, 45), attempts=attempts)
+    payload = request_json(endpoint, params, api_key=api_key, timeout=timeout, attempts=attempts)
     if payload.get("truncated") and not allow_truncated:
         raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
     return payload

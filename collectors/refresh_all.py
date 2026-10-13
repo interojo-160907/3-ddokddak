@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import traceback
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -56,36 +55,36 @@ def main(force_full: bool | None = None) -> int:
     }
     _write_result(report)
     base_collectors = (
-        ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=True)),
         ("aps", lambda: (refresh_aps_full if force_full else refresh_aps)(api_key=api_key, timeout=300)),
+        ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=True)),
         ("production", lambda: refresh_production(api_key=api_key, timeout=240, force_full=force_full)),
     )
     failed = False
-    # These source snapshots are independent. Running them together keeps a
-    # first launch from waiting for every large API response in series.
-    with ThreadPoolExecutor(max_workers=len(base_collectors)) as pool:
-        jobs = {pool.submit(collect): key for key, collect in base_collectors}
-        for job in as_completed(jobs):
-            key = jobs[job]
-            try:
-                result = job.result()
-                status = result.get("status", "error")
-                failed = failed or status != "success"
-                report["results"][key] = {"status": status, "result": result,
-                                           "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
-            except Exception as exc:
-                failed = True
-                report["results"][key] = {
-                    "status": "error",
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "traceback": traceback.format_exc(),
-                }
-            _write_result(report)
+    # Finish APS first. Nested BOM/production workers share two network slots;
+    # scheduling all sources at once starves queued requests before they start.
+    for key, collect in base_collectors:
+        report["current_source"] = key
+        _write_result(report)
+        try:
+            result = collect()
+            status = result.get("status", "error")
+            failed = failed or status not in {"success", "skipped"}
+            report["results"][key] = {"status": status, "result": result,
+                                       "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
+        except Exception as exc:
+            failed = True
+            report["results"][key] = {
+                "status": "error", "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+        _write_result(report)
 
     # WIP/performance, warehouses and hydration use the latest base snapshots.
     key = "live"
+    report["current_source"] = key
+    _write_result(report)
     try:
-        if report["results"].get("aps", {}).get("status") != "success":
+        if report["results"].get("aps", {}).get("status") not in {"success", "skipped"}:
             raise RuntimeError("Backward APS 수집이 완료되지 않아 실시간 계산을 보류합니다.")
         live_result = refresh_live(force_full=True) if force_full else refresh_live()
         report["results"][key] = {"status": live_result.get('status','error'), "result": live_result,
@@ -98,6 +97,7 @@ def main(force_full: bool | None = None) -> int:
             "traceback": traceback.format_exc(),
         }
     _write_result(report)
+    report["current_source"] = ""
     report["completed_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     _write_result(report)
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))

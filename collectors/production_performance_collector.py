@@ -119,7 +119,7 @@ def _fetch_once(start: date, end: date, api_key: str, timeout: int) -> dict[str,
     payload = request_json("/api/production-performance", {
         "date_from": start.isoformat(), "date_to": end.isoformat(),
         "limit": 0, "prompt_context": "똑딱이 생산3팀 당월·전월 생산실적 수집",
-    }, api_key=api_key, timeout=min(timeout, 45))
+    }, api_key=api_key, timeout=timeout)
     if payload.get("truncated") or (
         payload.get("total_count") is not None
         and int(payload["total_count"]) != len(payload.get("rows") or [])

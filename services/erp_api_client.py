@@ -69,11 +69,11 @@ def request_json(endpoint: str, params: dict | None = None, *, api_key: str = ""
     base = (base_url or os.getenv("DDOKDDAK_PROD3_API_BASE_URL", "https://plan.interojo.net")).rstrip("/")
     url = endpoint if endpoint.startswith(("https://", "http://")) else base + endpoint
     headers = api_headers(api_key)
-    read_timeout = max(1.0, min(float(timeout), 60.0))
+    read_timeout = max(1.0, min(float(timeout), 300.0))
     max_attempts = max(1, min(int(attempts), 2))
     started = time.monotonic()
     for attempt in range(1, max_attempts + 1):
-        if not _slots.acquire(timeout=90):
+        if not _slots.acquire(timeout=330):
             raise ApiRequestError(endpoint, "QueueTimeout", time.monotonic() - started, attempt - 1)
         retry = False
         delay = 1.0

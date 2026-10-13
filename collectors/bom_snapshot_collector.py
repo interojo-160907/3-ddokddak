@@ -57,7 +57,7 @@ SALINE_FIELDS = (
 
 def _fetch(endpoint: str, api_key: str, timeout: int) -> dict[str, Any]:
     payload = request_json(endpoint, {"limit": 0, "prompt_context": "똑딱이 생산3팀 BOM 스냅샷 갱신"},
-                           api_key=api_key, timeout=min(timeout, 60))
+                           api_key=api_key, timeout=timeout)
     if payload.get("truncated"):
         raise RuntimeError(f"{endpoint} 응답이 일부만 반환되었습니다.")
     if not payload.get("rows"):
@@ -279,7 +279,7 @@ def _saline_record(row: dict[str, Any]) -> tuple[Any, ...]:
 def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, Any]:
     now = datetime.now().astimezone()
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         product_future = pool.submit(_fetch, "/api/product-names", api_key, timeout)
         bom_future = pool.submit(_fetch, "/api/bom-explosion", api_key, timeout)
         saline_future = pool.submit(_fetch, "/api/product-saline", api_key, timeout)

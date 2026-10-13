@@ -59,7 +59,7 @@ def _repair_legacy_cp949(value: Any) -> Any:
 
 
 def _request(endpoint: str, params: dict[str, Any], api_key: str, timeout: int) -> dict[str, Any]:
-    payload = request_json(endpoint, params, api_key=api_key, timeout=min(timeout, 60))
+    payload = request_json(endpoint, params, api_key=api_key, timeout=timeout)
     return _repair_legacy_cp949(payload)
 
 
