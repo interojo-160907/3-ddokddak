@@ -46,9 +46,9 @@ class ApsRequestPolicyTests(unittest.TestCase):
 
     def test_old_management_deployment_fails_closed(self):
         response=Mock();response.json.return_value={'ok':True,'result':{'allowed':True}}
-        with patch.dict('os.environ',{'DDOKDDAK_PROD3_COORDINATION':'1'}), \
+        with patch.dict('os.environ',{'DDOKDDAK_PROD3_COORDINATION':'1','DDOKDDAK_MANAGEMENT_API_URL':'https://manager.example.test'}), \
              patch('services.erp_coordination.requests.post',return_value=response) as post:
-            with self.assertRaisesRegex(RuntimeError,'準備|준비'):
+            with self.assertRaisesRegex(RuntimeError,'준비'):
                 with request_turn():self.fail('ERP must not start')
         self.assertEqual(post.call_count,1)
 
