@@ -19,31 +19,7 @@ def _local_status() -> dict[str, Any]:
 
 
 def check_and_refresh(api_key: str = "", timeout: int = 60) -> dict[str, Any]:
-    local = _local_status()
-    from services.backward_source import outbound_state
-    source = outbound_state(_request("/api/aps-outbound-status", {"limit": 0}, api_key, timeout))
-    source_count = source["backward_count"]
-    source_refreshed_at = source["backward_at"]
-    unchanged = (
-        DB_PATH.is_file()
-        and local.get("source_identity") == source["source_identity"]
-        and local.get("backward_count") == source["backward_count"]
-        and local.get("plan_count") == source["plan_count"]
-        and local.get("plan_at") == source["plan_at"]
-        and local.get("wip_at") == source["wip_at"]
-        and local.get("wip_count") == source["wip_count"]
-        and local.get("status") == "success"
-    )
-    if unchanged:
-        return {
-            "status": "success",
-            "changed": False,
-            "source_refreshed_at": source_refreshed_at,
-            "source_rows": source_count,
-        }
-
-    result = refresh(api_key=api_key, timeout=max(timeout, 300))
-    return {**result, "changed": True}
+    return refresh(api_key=api_key, timeout=max(timeout, 300))
 
 
 from services.collection_lock import serialized_collection

@@ -1566,6 +1566,8 @@ class MainWindow(QMainWindow):
         self.data_status.setToolTip(
             "APS 원천 갱신을 1분마다 확인합니다. 변경 시 전체 원천과 통합 계산을 자동 갱신합니다."
         )
+        if result.get('wip_metadata_changed'):
+            QTimer.singleShot(250, lambda: self._start_data_collection('live', scheduled=True))
         if not result.get("changed"):
             return
 
@@ -5823,6 +5825,14 @@ class MainWindow(QMainWindow):
         self.settings_data_status.setText(
             f"{labels.get(source, source)} 수집 중 · 경과 {minutes:02d}:{seconds:02d}{suffix}"
         )
+        turn = self._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings' / f'erp_turn_{int(process.processId())}.json')
+        if turn.get('status') in {'waiting','cooldown'}:
+            owner = str(turn.get('active_user') or '')
+            position = turn.get('queue_position', '-')
+            detail = f'{owner} 수집 중 · ' if owner else ''
+            if turn.get('status') == 'cooldown':detail += '서버 보호 대기'
+            else:detail += f'내 수집 차례 대기 · 순서 {position}'
+            self.settings_data_status.setText(f'{detail} · 경과 {minutes:02d}:{seconds:02d}')
 
     def _collection_watchdog_expired(self) -> None:
         process = getattr(self, "settings_collection_process", None)

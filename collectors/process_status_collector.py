@@ -182,8 +182,52 @@ def _initialize(connection: sqlite3.Connection) -> None:
     )
 
 
+def _sync_wip_metadata(local, source):
+    if (local.get('wip_at'), local.get('wip_count')) == (source.get('wip_at'), source.get('wip_count')):
+        return False
+    connection = sqlite3.connect(DB_PATH)
+    try:
+        row = connection.execute('SELECT run_key,payload_json FROM source_provenance WHERE id=1').fetchone()
+        if not row or row[0] != source['run_key']:
+            raise RuntimeError('APS 저장 회차가 일치하지 않아 WIP 상태 갱신을 보류합니다.')
+        payload = json.loads(row[1])
+        payload.update(wip_at=source['wip_at'], wip_count=source['wip_count'])
+        connection.execute('UPDATE source_provenance SET wip_at=?,payload_json=? WHERE id=1',
+                           (source['wip_at'], json.dumps(payload,ensure_ascii=False)))
+        connection.commit()
+    finally:
+        connection.close()
+    local.update(wip_at=source['wip_at'], wip_count=source['wip_count'])
+    _atomic_json(STATUS_PATH, local)
+    return True
+
+
 def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
-    before = outbound_state(_request("/api/aps-outbound-status", {"limit": 0}, api_key, timeout))
+    from services.collection_lock import collection_lock
+    from services.aps_collection_policy import ApsPolicy
+    with collection_lock():
+        policy = ApsPolicy()
+        if policy.blocked():
+            raise RuntimeError('APS 실패 후 서버 보호 대기 중입니다. 재시도 간격은 10·20·40·60분입니다.')
+        policy.begin()
+        try:
+            before = outbound_state(_request('/api/aps-outbound-status', {'limit':0}, api_key, timeout))
+            local = _read_status(STATUS_PATH)
+            if DB_PATH.exists() and local.get('run_key') == before['run_key'] and local.get('status') == 'success':
+                wip_changed = _sync_wip_metadata(local, before)
+                policy.succeeded(before['run_key'])
+                return {**local, 'changed':False, 'wip_metadata_changed':wip_changed}
+            result = _refresh_snapshot(api_key, timeout, before)
+            if result.get('status') != 'success':
+                raise RuntimeError('APS 전체 수집이 완료되지 않아 이전 자료를 유지합니다.')
+            policy.succeeded(before['run_key'])
+            return {**result, 'changed':True}
+        except Exception:
+            policy.failed()
+            raise
+
+
+def _refresh_snapshot(api_key, timeout, before):
     payload = _request("/api/aps-backward-plan", {"limit": 0}, api_key, timeout)
     plan = _request("/api/aps-plan", {"limit": 0}, api_key, timeout)
     arrange = _request("/api/aps-arrange", {"limit": 0}, api_key, timeout)

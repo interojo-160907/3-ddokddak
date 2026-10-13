@@ -1,6 +1,6 @@
 """Small shared ERP transport; no data cache and no implicit nested retries.
 
-Sessions are thread-local. At most two requests in a collector process reach
+Sessions are thread-local. At most one request in a collector process reaches
 the ERP concurrently, even when BOM/performance workers are nested.
 Socket timeouts bound connection and read inactivity, not total transfer time.
 """
@@ -15,9 +15,10 @@ import requests
 from urllib3.exceptions import ReadTimeoutError
 
 from services.api_credentials import api_headers
+from services.erp_coordination import request_turn
 
 _local = threading.local()
-_slots = threading.BoundedSemaphore(2)
+_slots = threading.BoundedSemaphore(1)
 TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
 
 
@@ -72,10 +73,10 @@ def request_json(endpoint: str, params: dict | None = None, *, api_key: str = ""
     url = endpoint if endpoint.startswith(("https://", "http://")) else base + endpoint
     headers = api_headers(api_key)
     read_timeout = max(1.0, min(float(timeout), 300.0))
-    max_attempts = max(1, min(int(attempts), 2))
+    max_attempts = 1  # No immediate retries: failed collectors apply persisted backoff.
     started = time.monotonic()
     for attempt in range(1, max_attempts + 1):
-        if not _slots.acquire(timeout=330):
+        if not _slots.acquire(timeout=2100):
             raise ApiRequestError(endpoint, "QueueTimeout", time.monotonic() - started, attempt - 1)
         retry = False
         delay = 1.0
@@ -83,19 +84,11 @@ def request_json(endpoint: str, params: dict | None = None, *, api_key: str = ""
         kind = "RequestError"
         try:
             # Do not follow redirects with an ERP API key to a different origin.
-            with _session().get(url, params=params or {}, headers=headers,
+            with request_turn(endpoint), _session().get(url, params=params or {}, headers=headers,
                                 timeout=(5, read_timeout), allow_redirects=False) as response:
                 status = response.status_code
                 if status != 200:
-                    kind = "HTTPError"
-                    retry = status in TRANSIENT_STATUSES
-                    retry_after = response.headers.get("Retry-After")
-                    if retry_after:
-                        try:
-                            delay = max(1.0, float(retry_after))
-                            retry = retry and delay <= 5
-                        except ValueError:
-                            retry = False  # An HTTP date also means wait until a later cycle.
+                    raise ApiRequestError(endpoint, 'HTTPError', time.monotonic() - started, attempt, status)
                 else:
                     response.encoding = "utf-8"
                     try:
@@ -105,6 +98,7 @@ def request_json(endpoint: str, params: dict | None = None, *, api_key: str = ""
                     if isinstance(payload, dict) and payload.get("ok") is not False and payload.get("success") is not False:
                         return payload
                     kind = "APIError" if isinstance(payload, dict) else "InvalidJSON"
+                    raise ApiRequestError(endpoint, kind, time.monotonic() - started, attempt, status)
         except requests.ReadTimeout:
             # A timed-out database query may still run on the server. Avoid
             # immediately launching the same expensive query a second time.

@@ -6,7 +6,7 @@ on:
       target_version:
         description: 'Published installer to test against every prior release from v2.6.4'
         required: true
-        default: 'v2.9.5'
+        default: 'v2.9.6'
   push:
     tags:
       - "v*"
@@ -45,6 +45,7 @@ jobs:
         run: |
           node management/test_safe_mode.cjs
           node management/test_multi_program.cjs
+          node management/test_erp_turn.cjs
 
       # Personal unsigned release: no paid signing service or security-policy changes.
       - name: Build application

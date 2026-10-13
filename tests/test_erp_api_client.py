@@ -18,7 +18,7 @@ from services import erp_api_client as client
 def reply(status=200, payload=None, headers=None):
     response = Mock(status_code=status, headers=headers or {})
     response.__enter__ = Mock(return_value=response)
-    response.__exit__ = Mock(side_effect=lambda *_: response.close())
+    response.__exit__ = Mock(side_effect=lambda *_: (response.close(), False)[1])
     response.json.return_value = {"rows": [], "total_count": 0} if payload is None else payload
     return response
 
@@ -38,7 +38,7 @@ class ErpApiClientTests(unittest.TestCase):
         with patch.object(client, '_slots', slots), patch.object(client.requests.Session, 'get', return_value=reply()) as get:
             client.request_json('/api/aps-backward-plan', timeout=300)
         self.assertEqual(get.call_args.kwargs['timeout'], (5, 300))
-        slots.acquire.assert_called_once_with(timeout=330)
+        slots.acquire.assert_called_once_with(timeout=2100)
         slots.release.assert_called_once()
 
     def test_queue_timeout_never_sends_a_request(self):
@@ -73,13 +73,12 @@ class ErpApiClientTests(unittest.TestCase):
         self.assertNotIn("secret-key", str(caught.exception))
         self.assertEqual(get.call_args.kwargs['timeout'], (5, 30))
 
-    def test_connect_failure_retries_once_then_uses_same_request_and_releases_response(self):
+    def test_connect_failure_is_not_immediately_repeated(self):
         response = reply()
         with patch.object(client.requests.Session, "get", side_effect=[requests.ConnectTimeout(),response]) as get, patch.object(client.time, "sleep"):
-            self.assertEqual(client.request_json('/api/example'), {"rows": [],"total_count":0})
-        self.assertEqual(get.call_count,2)
-        self.assertEqual(get.call_args_list[0],get.call_args_list[1])
-        response.close.assert_called_once()
+            with self.assertRaises(client.ApiRequestError):
+                client.request_json('/api/example')
+        self.assertEqual(get.call_count,1)
 
     def test_body_read_timeout_wrapped_as_connection_error_is_not_repeated(self):
         from urllib3.exceptions import ReadTimeoutError
@@ -134,13 +133,14 @@ class ErpApiClientTests(unittest.TestCase):
             with self.assertRaises(client.ApiRequestError):client.request_json('/api/example')
         self.assertEqual(get.call_count,1)
 
-    def test_short_retry_after_is_respected_once(self):
+    def test_short_retry_after_waits_for_a_later_cycle(self):
         responses=[reply(503,headers={'Retry-After':'2'}),reply()]
         with patch.object(client.requests.Session,'get',side_effect=responses) as get, patch.object(client.time,'sleep') as sleep:
-            client.request_json('/api/example')
-        sleep.assert_called_once_with(2)
-        self.assertEqual(get.call_count,2)
-        for response in responses:response.close.assert_called_once()
+            with self.assertRaises(client.ApiRequestError):
+                client.request_json('/api/example')
+        sleep.assert_not_called()
+        self.assertEqual(get.call_count,1)
+        responses[0].close.assert_called_once()
 
     def test_non_json_or_array_payload_is_rejected_without_repeating(self):
         for payload in ([],None):
@@ -162,7 +162,7 @@ class ErpApiClientTests(unittest.TestCase):
             return reply()
         with patch.object(client.requests.Session,'get',side_effect=get), ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(lambda _:client.request_json('/api/example'), range(16)))
-        self.assertLessEqual(counts['maximum'],2)
+        self.assertEqual(counts['maximum'],1)
         self.assertEqual(counts['active'],0)
 
     def test_every_collector_and_health_check_use_saved_credentials(self):

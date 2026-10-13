@@ -29,6 +29,8 @@ function users_(spreadsheet) {
   const headers = rows.shift().map(text_);
   return {
     sheet: sheet, rows: rows,
+    name: headers.indexOf('사용자명'),
+    order: headers.indexOf('수집순서'),
     pc: column_(headers, ['PC 고유ID', 'PC 고유 ID']),
     program: column_(headers, ['허가 프로그램']),
     use: column_(headers, ['사용여부', '사용 여부'])
@@ -42,7 +44,7 @@ function presenceKey_(pcId, program) {
   return 'presence:' + JSON.stringify([pcId, program]);
 }
 function doGet() {
-  return json_({ok: true, service: '생산3공장 똑딱이 관리 API'});
+  return json_({ok: true, service: '생산3공장 똑딱이 관리 API', coordination_version:2});
 }
 
 // G열만 수정합니다. E열 권한과 버전관리 H2는 수정하지 않습니다.
@@ -99,6 +101,10 @@ function doPost(e) {
       text_(row[u.pc]).toUpperCase() === pcId &&
       text_(row[u.program]) === program);
     const allowed = allowed_(user, u.use);
+    if (['erp_acquire','erp_renew','erp_release','erp_cancel'].includes(request.action)) {
+      if (!allowed || program !== '생산3공장 똑딱이') throw new Error('수집 권한이 없는 PC입니다.');
+      return json_({ok:true, result:erpTurn_(pcId, request, u)});
+    }
     if (request.action === 'mode') {
       if (!allowed) throw new Error('등록되지 않았거나 사용이 중지된 PC입니다.');
       return json_({ok: true, result: safeModeControl_(spreadsheet, program)});

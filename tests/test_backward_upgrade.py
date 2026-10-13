@@ -87,7 +87,7 @@ class UpgradeTests(unittest.TestCase):
 
     def test_monitor_recollects_missing_database_even_with_success_status(self):
         state = dict(source_identity='x', backward_count=1, backward_at='now', plan_count=1, plan_at='now', wip_at='now', wip_count=1)
-        with tempfile.TemporaryDirectory() as directory, patch.object(monitor, 'DB_PATH', Path(directory)/'missing.sqlite'), patch.object(monitor, '_local_status', return_value=dict(state, status='success')), patch.object(monitor, '_request', return_value={}), patch('services.backward_source.outbound_state', return_value=state), patch.object(monitor, 'refresh', return_value={'status':'success'}) as refresh:
+        with tempfile.TemporaryDirectory() as directory, patch.object(monitor, 'DB_PATH', Path(directory)/'missing.sqlite'), patch.object(monitor, '_local_status', return_value=dict(state, status='success')), patch.object(monitor, '_request', return_value={}), patch('services.backward_source.outbound_state', return_value=state), patch.object(monitor, 'refresh', return_value={'status':'success','changed':True}) as refresh:
             self.assertTrue(monitor.check_and_refresh()['changed'])
             refresh.assert_called_once()
 
@@ -98,9 +98,9 @@ class UpgradeTests(unittest.TestCase):
 
     def test_version_metadata_is_consistent(self):
         root = Path(__file__).resolve().parents[1]
-        self.assertEqual(APP_VERSION, '2.9.5')
-        self.assertIn('"2.9.5"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
-        self.assertIn('filevers=(2, 9, 5, 0)', (root/'installer/version_info.txt').read_text(encoding='utf-8'))
+        self.assertEqual(APP_VERSION, '2.9.6')
+        self.assertIn('"2.9.6"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
+        self.assertIn('filevers=(2, 9, 6, 0)', (root/'installer/version_info.txt').read_text(encoding='utf-8'))
         self.assertNotIn('DelTree(', (root/'installer/production3.iss').read_text(encoding='utf-8'))
         self.assertIn('if not UninstallSilent then MsgBox(', (root/'installer/production3.iss').read_text(encoding='utf-8'))
 

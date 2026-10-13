@@ -144,7 +144,7 @@ class BackwardCycleTests(unittest.TestCase):
         with patch.object(monitor, "_local_status", return_value={"status": "success", "source_refreshed_at": state["backward_at"]}), \
              patch.object(monitor, "_request", return_value={}), \
              patch("services.backward_source.outbound_state", return_value=state), \
-             patch.object(monitor, "refresh", return_value={"status": "success"}) as refresh:
+             patch.object(monitor, "refresh", return_value={"status": "success", "changed":True}) as refresh:
             self.assertTrue(monitor.check_and_refresh()["changed"])
             refresh.assert_called_once()
 

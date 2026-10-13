@@ -9,6 +9,7 @@ from pathlib import Path
 
 import requests
 from services.api_credentials import api_headers
+from services.erp_coordination import request_turn
 
 
 BASE_URL = os.getenv("DDOKDDAK_PROD3_API_BASE_URL", "https://plan.interojo.net").rstrip("/")
@@ -22,25 +23,29 @@ def _probe(path: str, params: dict[str, object], timeout: float) -> dict:
     started = time.monotonic()
     result = {"endpoint": path, "checked_at": datetime.now().astimezone().isoformat()}
     try:
-        with requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(),
+        with request_turn(path), requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(),
                           timeout=(5, timeout), allow_redirects=False) as response:
             code = response.status_code
             result.update(status="success" if 200 <= code < 300 else
                           "delayed" if code in {408, 429, 500, 502, 503, 504, 524} else "error",
                           http_status=code)
-    except (requests.Timeout, requests.ConnectionError) as exc:
+            if code >= 400:
+                response.raise_for_status()
+    except (requests.Timeout, requests.ConnectionError, RuntimeError) as exc:
         result.update(status="delayed", error_type=type(exc).__name__)
+    except requests.HTTPError as exc:
+        result['error_type'] = type(exc).__name__
     except requests.RequestException as exc:
         result.update(status="error", error_type=type(exc).__name__)
     result["elapsed_seconds"] = round(time.monotonic() - started, 3)
     return result
 
 
-def check_collection_api_details(timeout: float = 8.0) -> dict[str, dict]:
+def check_collection_api_details(timeout: float = 30.0) -> dict[str, dict]:
     today = date.today().isoformat()
     probes = {
         "bom": ("/api/product-names", {"limit": 1}),
-        "aps": ("/api/aps-backward-plan", {"limit": 1}),
+        "aps": ("/api/aps-outbound-status", {"limit": 0}),
         "production": (
             "/api/production-performance",
             {"date_from": today, "date_to": today, "limit": 1},
@@ -51,7 +56,7 @@ def check_collection_api_details(timeout: float = 8.0) -> dict[str, dict]:
         ),
     }
     results = {}
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="api-health") as executor:
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="api-health") as executor:
         futures = {
             executor.submit(_probe, path, params, timeout): key
             for key, (path, params) in probes.items()
