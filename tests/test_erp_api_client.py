@@ -24,6 +24,14 @@ def reply(status=200, payload=None, headers=None):
 
 
 class ErpApiClientTests(unittest.TestCase):
+    def test_gateway_timeout_explains_server_delay_without_repeating_query(self):
+        with patch.object(client.requests.Session, 'get', return_value=reply(524)) as get:
+            with self.assertRaises(client.ApiRequestError) as caught:
+                client.request_json('/api/aps-backward-plan', timeout=300)
+        self.assertEqual(get.call_count, 1)
+        self.assertIn('서버 처리 지연', str(caught.exception))
+        self.assertIn('HTTP 524', str(caught.exception))
+
     def test_large_snapshot_timeout_and_bounded_queue(self):
         slots = Mock()
         slots.acquire.return_value = True

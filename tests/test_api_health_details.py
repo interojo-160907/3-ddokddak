@@ -8,6 +8,15 @@ from services.api_health import _probe, record_health, connection_label
 from services.collection_health import header_status
 
 class ApiHealthTests(unittest.TestCase):
+    def test_gateway_timeout_is_server_delay(self):
+        response = Mock(status_code=524)
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        with patch('services.api_health.requests.get', return_value=response):
+            result = _probe('/api/aps-backward-plan', {}, 30)
+        self.assertEqual(result['status'], 'delayed')
+        self.assertEqual(result['http_status'], 524)
+
     def statuses(self):
         return {k: {'status':'success'} for k in ('bom_status','aps_status','production_status','live_status')}
 

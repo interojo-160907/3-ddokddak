@@ -38,6 +38,8 @@ class ApiRequestError(RuntimeError):
             reason = "API 인증키·조회 권한 확인 필요"
         elif http_status == 429:
             reason = "서버 요청 제한 · 다음 갱신에서 재시도"
+        elif http_status == 524:
+            reason = "서버 처리 지연으로 중계 서버 대기 시간 초과 · 기존 자료 유지 · 다음 갱신에서 재시도"
         suffix = f" · HTTP {http_status}" if http_status is not None else ""
         super().__init__(f"{self.endpoint}: {reason} ({kind}{suffix}, {self.elapsed_seconds:g}초, {attempts}회)")
 

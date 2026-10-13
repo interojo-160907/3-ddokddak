@@ -26,7 +26,7 @@ def _probe(path: str, params: dict[str, object], timeout: float) -> dict:
                           timeout=(5, timeout), allow_redirects=False) as response:
             code = response.status_code
             result.update(status="success" if 200 <= code < 300 else
-                          "delayed" if code in {408, 429, 500, 502, 503, 504} else "error",
+                          "delayed" if code in {408, 429, 500, 502, 503, 504, 524} else "error",
                           http_status=code)
     except (requests.Timeout, requests.ConnectionError) as exc:
         result.update(status="delayed", error_type=type(exc).__name__)
