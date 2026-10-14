@@ -1307,7 +1307,11 @@ class MainWindow(QMainWindow):
         self.aps_monitor_timer = QTimer(self)
         self.aps_monitor_timer.timeout.connect(self._start_aps_monitor_check)
         self.collection_scheduler_timer = QTimer(self)
-        self.collection_scheduler_timer.setInterval(30_000)
+        self.collection_scheduler_timer.setInterval(1_000)
+        self._distributed_pending = set()
+        from services.program_gate import pc_identifier
+        self._distribution_pc_id = pc_identifier()
+        self._aps_distribution_due = None
         self.collection_scheduler_timer.timeout.connect(self._run_scheduled_collections)
         self.collection_scheduler_timer.start()
         self.data_cleanup_timer = QTimer(self)
@@ -5241,8 +5245,12 @@ class MainWindow(QMainWindow):
         errors = self._read_collection_errors()
         occurred_at = datetime.now().isoformat(timespec="seconds")
         clean_message = str(message or "수집기가 오류 내용을 반환하지 않았습니다.").strip()
+        from services.collection_distribution import retry_deadline
         for key in targets:
+            failures = int(errors.get(key, {}).get("failures", 0)) + 1
             errors[key] = {
+                "failures": failures,
+                "retry_after": retry_deadline(datetime.now(), failures).isoformat(timespec="seconds"),
                 "source": labels.get(key, key),
                 "occurred_at": occurred_at,
                 "exit_code": int(exit_code),
@@ -5478,6 +5486,8 @@ class MainWindow(QMainWindow):
                 return None
 
     def _run_scheduled_collections(self) -> None:
+        if getattr(self, "_distributed_pending", None):
+            return
         if datetime.now() < getattr(self, '_collection_resume_at', datetime.min):return
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             return
@@ -5486,7 +5496,11 @@ class MainWindow(QMainWindow):
         now = datetime.now()
         bootstrap_path = DATA_CENTER_DIR / "backward-v1" / "settings" / "version_collection_bootstrap.json"
         bootstrap = self._read_refresh_status(bootstrap_path)
+        from services.collection_distribution import retry_blocked
+        errors = self._read_collection_errors() if hasattr(self, "_read_collection_errors") else {}
         if str(bootstrap.get("completed_version") or "") != APP_VERSION:
+            if retry_blocked(errors, "all", now):
+                return
             attempted = self._collection_last_attempt.get("version_bootstrap")
             if attempted is None or (now - attempted) >= timedelta(minutes=5):
                 self._collection_last_attempt["version_bootstrap"] = now
@@ -5547,7 +5561,14 @@ class MainWindow(QMainWindow):
                 else max(5, minutes)
             )
             retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
-            if due and retry_ready:
+            if due and retry_ready and not retry_blocked(errors, source, now):
+                if source == "aps" and hasattr(self, "_distribution_pc_id"):
+                    from services.collection_distribution import periodic_delay
+                    if self._aps_distribution_due is None:
+                        self._aps_distribution_due = now + timedelta(seconds=periodic_delay(self._distribution_pc_id, "aps-monitor", now))
+                    if now < self._aps_distribution_due:
+                        continue
+                    self._aps_distribution_due = None
                 due_sources.append(source)
                 waiting_wip_due = waiting_wip_due or waiting_wip
         if not due_sources:
@@ -5673,7 +5694,26 @@ class MainWindow(QMainWindow):
                 button.setText("새로고침")
                 button.setEnabled(True)
 
-    def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
+    def _start_data_collection(self, source: str, *, scheduled: bool = False, _spread_applied: bool = False) -> None:
+        if scheduled and not _spread_applied:
+            if source in self._distributed_pending:
+                return
+            from services.collection_distribution import periodic_delay, stable_offset, retry_blocked
+            if retry_blocked(self._read_collection_errors(), source, datetime.now()):
+                return
+            bootstrap = self._read_refresh_status(DATA_CENTER_DIR / "backward-v1/settings/version_collection_bootstrap.json")
+            initial = source == "all" and bootstrap.get("completed_version") != APP_VERSION
+            delay = stable_offset(self._distribution_pc_id, "initial", 180) if initial else periodic_delay(self._distribution_pc_id, source, datetime.now())
+            self._distributed_pending.add(source)
+            def receive():
+                self._distributed_pending.discard(source)
+                if datetime.now() < getattr(self, "_collection_resume_at", datetime.min):
+                    return
+                if retry_blocked(self._read_collection_errors(), source, datetime.now()):
+                    return
+                self._start_data_collection(source, scheduled=True, _spread_applied=True)
+            QTimer.singleShot(max(1, int(delay * 1000)), receive)
+            return
         if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" and os.getenv('DDOKDDAK_PROD3_DMZ_REVIEW') != '1' and not (os.getenv('DDOKDDAK_INVENTORY_PREVIEW')=='1' and source=='live' and not scheduled):
             return  # The existing installed app remains the collector during parallel review.
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
