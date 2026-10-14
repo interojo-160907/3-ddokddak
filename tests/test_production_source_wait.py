@@ -2,9 +2,9 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 from collectors import production_performance_collector as production
 from services import dmz_read_client as dmz
@@ -15,6 +15,25 @@ import test_collection_catchup as catchup
 
 
 class ProductionSourceWaitTests(unittest.TestCase):
+    def test_month_end_uses_published_history_without_duplicating_current_alias(self):
+        old={'endpoint':'/api/production-performance','snapshot_id':'old',
+             'date_from':'2026-09-01','date_to':'2026-09-16','published_at':'2026-10-15'}
+        latest={'endpoint':'/api/production-performance','snapshot_id':'latest',
+                'date_from':'2026-09-17','date_to':'2026-10-31','published_at':'2026-10-31'}
+        connection=MagicMock()
+        connection.execute.side_effect=[Mock(fetchall=Mock(return_value=[latest])),
+                                        Mock(fetchall=Mock(return_value=[])),
+                                        Mock(fetchall=Mock(return_value=[old, latest]))]
+        with patch.object(dmz,'_catalog',None), patch.object(dmz,'connection') as connect, \
+             patch.object(dmz,'datetime') as clock:
+            connect.return_value.__enter__.return_value=connection
+            clock.now.return_value=datetime(2026,10,31,tzinfo=timezone(timedelta(hours=9)))
+            self.assertEqual([r['snapshot_id'] for r in dmz.catalog()],['latest','old'])
+            self.assertEqual(dmz.missing_production_days(date(2026,9,1),date(2026,10,31)),[])
+            self.assertEqual(connection.execute.call_args.args[1],('2026-09-01','2026-10-31'))
+            sql=connection.execute.call_args.args[0]
+            self.assertIn("s.status='published' AND NOT sc.truncated",sql)
+
     def test_coverage_holes_and_explicit_empty_days(self):
         sources = [{'endpoint':'/api/production-performance', 'date_from':'2026-09-30',
                     'date_to':'2026-09-30', 'row_count':0},

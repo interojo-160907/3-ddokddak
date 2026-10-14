@@ -139,6 +139,26 @@ def catalog():
                     ORDER BY j.id,sc.date_from,s.published_at DESC''').fetchall()
                 ids={r['snapshot_id'] for r in _catalog}
                 _catalog.extend(r for r in history if r['snapshot_id'] not in ids)
+                # Latest aliases retain about 45 days, while the dashboard
+                # needs up to 62 days (previous month + current month). Keep
+                # complete published historical ranges, newest owner per day.
+                today = datetime.now(timezone(timedelta(hours=9))).date()
+                retained_start = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+                production_history = c.execute('''SELECT DISTINCT ON (j.id,sc.date_from,sc.date_to)
+                    j.id AS job_id,j.dataset,j.endpoint,j.request_params,
+                    s.published_at AS last_success_at,s.id AS snapshot_id,s.run_id,
+                    s.row_count,s.source_version,s.content_hash,s.published_at,
+                    sc.date_from,sc.date_to
+                    FROM collector_hub.collection_job j
+                    JOIN collector_hub.snapshot s ON s.job_id=j.id
+                    JOIN scm_client.snapshot_scope sc ON sc.snapshot_id=s.id
+                    WHERE j.enabled AND j.endpoint='/api/production-performance'
+                    AND s.status='published' AND NOT sc.truncated
+                    AND sc.date_to >= %s AND sc.date_from <= %s
+                    ORDER BY j.id,sc.date_from,sc.date_to,s.published_at DESC''',
+                    (retained_start.isoformat(), today.isoformat())).fetchall()
+                ids={r['snapshot_id'] for r in _catalog}
+                _catalog.extend(r for r in production_history if r['snapshot_id'] not in ids)
                 _catalog.sort(key=lambda r:r['published_at'],reverse=True)
         return _catalog
 
