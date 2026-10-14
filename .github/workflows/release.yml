@@ -46,6 +46,8 @@ jobs:
           node management/test_safe_mode.cjs
           node management/test_multi_program.cjs
           node management/test_erp_turn.cjs
+          node management/test_version_comparison.cjs
+          node management/test_server_read_config.cjs
 
       # Personal unsigned release: no paid signing service or security-policy changes.
       - name: Build application
@@ -130,6 +132,8 @@ jobs:
           $hash = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  ddokddak-production3-setup.exe" |
             Set-Content "installer\output\ddokddak-production3-setup.exe.sha256" -Encoding ascii
+          $script = @('management/Code.gs','management/SafeMode.gs','management/ErpTurn.gs') | ForEach-Object { Get-Content -LiteralPath $_ -Raw }
+          ($script -join "`r`n`r`n") | Set-Content "installer/output/Google-Management-Code-$('${{ github.ref_name }}'.TrimStart('v')).txt" -Encoding utf8
 
       - name: Create or update GitHub Release
         shell: pwsh
@@ -139,13 +143,14 @@ jobs:
         run: |
           $asset = "installer\output\ddokddak-production3-setup.exe"
           $hash = "$asset.sha256"
+          $scriptAsset = "installer/output/Google-Management-Code-$($env:TAG_NAME.TrimStart('v')).txt"
           $publicationFlags = if (Test-Path "management/SERVER_READ_ROLLOUT_PENDING") { @("--prerelease", "--latest=false") } else { @("--latest") }
           gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:TAG_NAME $asset $hash --clobber --repo $env:GITHUB_REPOSITORY
+            gh release upload $env:TAG_NAME $asset $hash $scriptAsset --clobber --repo $env:GITHUB_REPOSITORY
             gh release edit $env:TAG_NAME --notes-file "RELEASE_NOTES_$env:TAG_NAME.md" @publicationFlags --repo $env:GITHUB_REPOSITORY
           } else {
-            gh release create $env:TAG_NAME $asset $hash --notes-file "RELEASE_NOTES_$env:TAG_NAME.md" @publicationFlags `
+            gh release create $env:TAG_NAME $asset $hash $scriptAsset --notes-file "RELEASE_NOTES_$env:TAG_NAME.md" @publicationFlags `
               --title $env:TAG_NAME --repo $env:GITHUB_REPOSITORY
           }
 

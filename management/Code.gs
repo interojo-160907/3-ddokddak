@@ -11,6 +11,19 @@ function text_(value) {
 function normalizeVersion_(value) {
   return text_(value).replace(/^v/i, '');
 }
+function newerVersion_(latest, current) {
+  const parse = value => {
+    const version = normalizeVersion_(value);
+    return /^\d+(\.\d+)*$/.test(version) ? version.split('.').map(Number) : null;
+  };
+  const a = parse(latest), b = parse(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const difference = (a[i] || 0) - (b[i] || 0);
+    if (difference !== 0) return difference > 0;
+  }
+  return false;
+}
 function column_(headers, names) {
   for (const name of names) {
     const index = headers.indexOf(name);
@@ -138,8 +151,7 @@ function doPost(e) {
       text_(row[versionProgramColumn]) === program);
     const latestVersion = versionRow ? text_(versionRow[latestColumn]) : '';
     const updateUrl = versionRow ? text_(versionRow[installerColumn]) : '';
-    const updateRequired = Boolean(allowed && latestVersion &&
-      normalizeVersion_(latestVersion) !== currentVersion);
+    const updateRequired = Boolean(allowed && newerVersion_(latestVersion, currentVersion));
     let message = '사용 권한 정상';
     if (!allowed) {
       message = '등록되지 않았거나 사용이 중지된 PC입니다.';
