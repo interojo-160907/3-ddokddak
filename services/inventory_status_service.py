@@ -148,6 +148,19 @@ class InventoryStatusService:
 
     def _warm_specs(self, missing):
         # Save successful items individually; resume only missing items later.
+        from services.dmz_read_client import route_to_dmz
+        if route_to_dmz('/api/item-list-bulk'):
+            # Server data is published in thirty code partitions. Read each
+            # partition once, instead of inflating it again for every item.
+            groups=collections.defaultdict(list)
+            for base in missing: groups[base[:2]].append(base)
+            for prefix,bases in groups.items():
+                data=request_json('/api/item-list-bulk',{'gd_cd':prefix,'limit':0},timeout=30)
+                for base in bases:
+                    rows=[r for r in data['rows'] if base in norm(r.get('gd_cd'))]
+                    self.save_response('item_'+base,dict(data,rows=rows,total_count=len(rows),
+                                                       returned_count=len(rows),truncated=False))
+            return
         bounded_map(lambda base: self._request('item_'+base, '/api/item-list-bulk',
                                               {'gd_cd':base, 'limit':0}), missing)
 

@@ -129,6 +129,7 @@ def main() -> int:
         return run_collector_mode(sys.argv[2:])
     if not acquire_single_instance():
         return 0
+    os.environ.setdefault('DDOKDDAK_PROD3_TRANSPORT', 'dmz')
     ensure_directories()
     configure_windows_identity()
     QApplication.setHighDpiScaleFactorRoundingPolicy(

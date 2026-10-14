@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QObject,
     QPointF,
     QProcess,
+    QProcessEnvironment,
     QRect,
     QRectF,
     QSize,
@@ -110,6 +111,10 @@ def _hide_windows_process_window(arguments) -> None:
 
 def _background_process(parent: QWidget) -> QProcess:
     process = QProcess(parent)
+    environment = QProcessEnvironment.systemEnvironment()
+    environment.insert('DDOKDDAK_PROD3_TRANSPORT', 'dmz')
+    environment.insert('DDOKDDAK_PROD3_COORDINATION', '1')
+    process.setProcessEnvironment(environment)
     process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
     if sys.platform == "win32":
         modifier_setter = getattr(process, "setCreateProcessArgumentsModifier", None)
@@ -1521,7 +1526,7 @@ class MainWindow(QMainWindow):
         self._refresh_header_status()
 
     def _start_aps_monitor_check(self) -> None:
-        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1":
+        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" and os.getenv('DDOKDDAK_PROD3_DMZ_REVIEW') != '1':
             return
         if (
             hasattr(self, "settings_collection_process")
@@ -5051,7 +5056,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "설치·업데이트 후 첫 실행은 전체 재수집합니다. 이후 선택 주기로 갱신하며, APS 자동 수집은 Backward 원천 변경 시 갱신합니다."
+            "자동·전체 갱신은 사내 서버 저장 자료를 받습니다. 실시간·LOT 수동 갱신은 WIP를 서버에서 받고, 실적·수불·수화 지시만 원본에서 조회합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5667,7 +5672,7 @@ class MainWindow(QMainWindow):
                 button.setEnabled(True)
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False) -> None:
-        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" and not (os.getenv('DDOKDDAK_INVENTORY_PREVIEW')=='1' and source=='live' and not scheduled):
+        if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" and os.getenv('DDOKDDAK_PROD3_DMZ_REVIEW') != '1' and not (os.getenv('DDOKDDAK_INVENTORY_PREVIEW')=='1' and source=='live' and not scheduled):
             return  # The existing installed app remains the collector during parallel review.
         if hasattr(self, "settings_collection_process") and self.settings_collection_process.state() != QProcess.NotRunning:
             if not scheduled:
@@ -5714,6 +5719,11 @@ class MainWindow(QMainWindow):
             return
         process.setWorkingDirectory(str(ROOT_DIR))
         bootstrap = self._read_refresh_status(DATA_CENTER_DIR / "backward-v1/settings/version_collection_bootstrap.json")
+        from services.dmz_read_client import transport_for_collection
+        environment = process.processEnvironment()
+        self._collection_active_transport = transport_for_collection(source, scheduled)
+        environment.insert('DDOKDDAK_PROD3_TRANSPORT', self._collection_active_transport)
+        process.setProcessEnvironment(environment)
         force_full = source == "all" and (not scheduled or bootstrap.get("completed_version") != APP_VERSION)
         program, arguments = _collector_process_command(scripts[source], *(["--full"] if force_full else []))
         process.setProgram(program)
@@ -5812,7 +5822,9 @@ class MainWindow(QMainWindow):
         minutes, seconds = divmod(elapsed_seconds, 60)
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         source = getattr(self, "_collection_active_source", "all")
-        suffix = " · API 응답을 기다리는 중" if elapsed_seconds >= 30 else ""
+        transport_label = '원본 실적 갱신' if getattr(self,'_collection_active_transport','dmz') == 'manual_live' else '사내 서버 자료 받기'
+        suffix = (" · 원본 API 응답 대기" if transport_label == '원본 실적 갱신'
+                  else " · 서버 자료를 읽는 중") if elapsed_seconds >= 30 else ""
         report = self._read_refresh_status(INVENTORY_STATUS_DATA_DIR / 'refresh_status.json')
         try:current = datetime.fromisoformat(report.get('started_at','')).replace(tzinfo=None) >= started - timedelta(seconds=2)
         except ValueError:current = False
@@ -5823,7 +5835,7 @@ class MainWindow(QMainWindow):
             for page in (getattr(self,'live_need_page',None), getattr(self,'inventory_page',None), getattr(self,'lot_work_order_page',None)):
                 if page is not None:page.calculation_status.setText(suffix.removeprefix(' · '))
         self.settings_data_status.setText(
-            f"{labels.get(source, source)} 수집 중 · 경과 {minutes:02d}:{seconds:02d}{suffix}"
+            f"{labels.get(source, source)} · {transport_label} · 경과 {minutes:02d}:{seconds:02d}{suffix}"
         )
         turn = self._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings' / f'erp_turn_{int(process.processId())}.json')
         if turn.get('status') in {'waiting','cooldown'}:

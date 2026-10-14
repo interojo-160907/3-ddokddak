@@ -69,6 +69,9 @@ def _read_timed_out(error: Exception) -> bool:
 
 def request_json(endpoint: str, params: dict | None = None, *, api_key: str = "",
                  timeout: float = 30, attempts: int = 2, base_url: str | None = None) -> dict:
+    from services.dmz_read_client import route_to_dmz, request_json as read_stored
+    if route_to_dmz(endpoint):
+        return read_stored(endpoint, params)
     base = (base_url or os.getenv("DDOKDDAK_PROD3_API_BASE_URL", "https://plan.interojo.net")).rstrip("/")
     url = endpoint if endpoint.startswith(("https://", "http://")) else base + endpoint
     headers = api_headers(api_key)
@@ -96,7 +99,8 @@ def request_json(endpoint: str, params: dict | None = None, *, api_key: str = ""
                     except ValueError:
                         payload = None
                     if isinstance(payload, dict) and payload.get("ok") is not False and payload.get("success") is not False:
-                        return payload
+                        from services.dmz_read_client import remember_manual
+                        return remember_manual(endpoint, params, payload)
                     kind = "APIError" if isinstance(payload, dict) else "InvalidJSON"
                     raise ApiRequestError(endpoint, kind, time.monotonic() - started, attempt, status)
         except requests.ReadTimeout:

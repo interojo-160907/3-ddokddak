@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_dynamic_libs
 
 
 project_root = Path(SPECPATH)
@@ -9,7 +9,7 @@ project_root = Path(SPECPATH)
 a = Analysis(
     [str(project_root / "gui_app_pyside6.py")],
     pathex=[str(project_root)],
-    binaries=[],
+    binaries=collect_dynamic_libs("psycopg_binary"),
     datas=[
         (str(project_root / "assets"), "assets"),
         (str(project_root / "styles"), "styles"),
@@ -17,6 +17,7 @@ a = Analysis(
     hiddenimports=[
         *collect_submodules("xlsxwriter"),
         *collect_submodules("openpyxl"),
+        *collect_submodules("psycopg_binary"),
         "services.safe_mode",
         "numpy",
         "services.windows_icon",

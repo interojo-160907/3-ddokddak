@@ -101,6 +101,14 @@ function doPost(e) {
       text_(row[u.pc]).toUpperCase() === pcId &&
       text_(row[u.program]) === program);
     const allowed = allowed_(user, u.use);
+    if (request.action === 'server_read_config') {
+      if (!allowed || program !== '생산3공장 똑딱이') {
+        return json_({ok:false,result:{allowed:false,message:'서버 조회 권한이 없는 PC입니다.'}});
+      }
+      const dsn = PropertiesService.getScriptProperties().getProperty('PROD3_DMZ_READ_DSN');
+      if (!dsn) return json_({ok:false,result:{allowed:true,message:'공통 서버 조회 설정 등록 대기'}});
+      return json_({ok:true,result:{allowed:true,server_read:{dsn:dsn}}});
+    }
     if (['erp_acquire','erp_renew','erp_release','erp_cancel'].includes(request.action)) {
       if (!allowed || program !== '생산3공장 똑딱이') throw new Error('수집 권한이 없는 PC입니다.');
       return json_({ok:true, result:erpTurn_(pcId, request, u)});

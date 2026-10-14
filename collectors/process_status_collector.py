@@ -207,9 +207,12 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
     from services.aps_collection_policy import ApsPolicy
     with collection_lock():
         policy = ApsPolicy()
-        if policy.blocked():
+        from services.dmz_read_client import route_to_dmz
+        stored_mode = route_to_dmz('/api/aps-plan')
+        if not stored_mode and policy.blocked():
             raise RuntimeError('APS 실패 후 서버 보호 대기 중입니다. 재시도 간격은 10·20·40·60분입니다.')
-        policy.begin()
+        if not stored_mode:
+            policy.begin()
         try:
             before = outbound_state(_request('/api/aps-outbound-status', {'limit':0}, api_key, timeout))
             local = _read_status(STATUS_PATH)
@@ -223,7 +226,8 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
             policy.succeeded(before['run_key'])
             return {**result, 'changed':True}
         except Exception:
-            policy.failed()
+            if not stored_mode:
+                policy.failed()
             raise
 
 
