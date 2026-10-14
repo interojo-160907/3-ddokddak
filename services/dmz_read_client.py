@@ -148,6 +148,20 @@ def reset_catalog():
     with _lock: _catalog=None
 
 
+def missing_production_days(start, end):
+    """Check published coverage before downloading any production snapshots.
+
+    Coverage is independent of row counts: an explicitly collected empty day
+    is valid, while an absent day must never be turned into zero production.
+    """
+    sources = [s for s in catalog() if s['endpoint'] == '/api/production-performance']
+    return [(start + timedelta(days=i)).isoformat()
+            for i in range((end - start).days + 1)
+            if not any(s.get('date_from') and s.get('date_to')
+                       and s['date_from'] <= (start + timedelta(days=i)).isoformat() <= s['date_to']
+                       for s in sources)]
+
+
 def missing_calculation_sources():
     rows=catalog()
     required=('/api/product-names','/api/bom-explosion','/api/product-saline',

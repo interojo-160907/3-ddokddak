@@ -48,6 +48,7 @@ def main(force_full: bool | None = None) -> int:
     api_key = resolve_api_key()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     report = {
+        "app_version": __import__('config').APP_VERSION,
         "started_at": started_at,
         "completed_at": "",
         "results": {},
@@ -71,7 +72,7 @@ def main(force_full: bool | None = None) -> int:
         try:
             result = collect()
             status = result.get("status", "error")
-            failed = failed or status not in {"success", "skipped"}
+            failed = failed or status not in {"success", "skipped", "waiting_source"}
             report["results"][key] = {"status": status, "result": result,
                                        "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
         except Exception as exc:
@@ -104,7 +105,8 @@ def main(force_full: bool | None = None) -> int:
     report["completed_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
     _write_result(report)
     print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
-    return 1 if failed else 0 if report['results']['live']['status']=='success' else 2
+    pending = any(v.get('status') == 'waiting_source' for v in report['results'].values())
+    return 1 if failed else 0 if not pending and report['results']['live']['status']=='success' else 2
 
 
 if __name__ == "__main__":

@@ -82,6 +82,24 @@ def _version_base_ready(full_report: dict) -> bool:
     )
 
 
+def _bootstrap_resume_source(report: dict) -> str:
+    """Resume just the missing source from this version's completed batch."""
+    if report.get('app_version') != APP_VERSION or not report.get('completed_at'):
+        return 'all'
+    results = report.get('results') or {}
+    for key in ('aps', 'bom', 'production', 'live'):
+        if results.get(key, {}).get('status') not in {'success', 'skipped'}:
+            return key
+    return 'all'
+
+
+def _source_wait_due(status: dict, now: datetime) -> bool:
+    try:
+        return now.astimezone() >= datetime.fromisoformat(status['retry_after']).astimezone()
+    except (KeyError, TypeError, ValueError):
+        return True
+
+
 def _collector_executable() -> str:
     if getattr(sys, "frozen", False) or sys.platform != "win32":
         return sys.executable
@@ -5210,6 +5228,10 @@ class MainWindow(QMainWindow):
                 if not isinstance(info, dict):
                     continue
                 message = str(info.get("message") or "")
+                if key == 'production' and '사내 서버 조회기간 미수집: /api/production-performance ' in message:
+                    # Pre-3.1.5 classified unpublished dates as failures. Let the
+                    # new coverage check record an explicit wait, without the old cooldown.
+                    continue
                 if '사용자가 진행 중인 데이터 수집을 중단' in message:
                     continue
                 inferred = next(
@@ -5355,10 +5377,12 @@ class MainWindow(QMainWindow):
                 has_error = isinstance(error_info, dict) and bool(error_info.get("message"))
                 retained = status_value == "retained"
                 waiting_wip = status_value == "waiting_wip"
+                waiting_source = status_value == "waiting_source"
                 success = status_value in {"success", "skipped", "retained"} and not has_error
                 state_text = (
                     "● 오류 발생"
                     if has_error
+                    else "● 서버 자료 대기 · 기존 유지" if waiting_source
                     else "● WIP 새 회차 감시 중"
                     if waiting_wip
                     else
@@ -5395,6 +5419,7 @@ class MainWindow(QMainWindow):
                 controls["rows"].setText(f"{count_text}건" if count_text else "-")
                 if key == "production":
                     controls["state"].setToolTip(
+                        str(status.get('message') or '') + '\n' +
                         f"07시 전체 완료일 {status.get('daily_full_date') or '미완료'}\n"
                         f"수집 범위 {status.get('collection_from') or '-'} ~ {status.get('date_to') or '-'}"
                     )
@@ -5505,6 +5530,13 @@ class MainWindow(QMainWindow):
             if attempted is None or (now - attempted) >= timedelta(minutes=5):
                 self._collection_last_attempt["version_bootstrap"] = now
                 source = "live" if bootstrap.get("base_completed_version") == APP_VERSION else "all"
+                if source == 'all':
+                    report = self._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings/full_refresh_status.json')
+                    source = _bootstrap_resume_source(report)
+                if source == 'production':
+                    state = self._read_refresh_status(DATA_CENTER_DIR / 'production-performance/snapshot/refresh_status.json')
+                    if state.get('status') == 'waiting_source' and not _source_wait_due(state, now):
+                        return
                 self._start_data_collection(source, scheduled=True)
             return
         definitions = (
@@ -5529,14 +5561,17 @@ class MainWindow(QMainWindow):
             status = self._read_refresh_status(status_path)
             status_value = str(status.get("status") or "")
             waiting_wip = source == "live" and status_value == "waiting_wip"
+            waiting_source = source == 'production' and status_value == 'waiting_source'
             minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
             # APS 변경으로 시작된 WIP 감시는 정기 수집 설정과 별개로 완료까지 이어 간다.
-            if minutes <= 0 and not waiting_wip and not (
+            if minutes <= 0 and not waiting_wip and not waiting_source and not (
                 source == "live" and inventory_bootstrap_due
             ):
                 continue
             refreshed = self._status_refreshed_at(status_path)
             attempted = self._collection_last_attempt.get(source)
+            if waiting_source and not _source_wait_due(status, now):
+                continue
             daily_full_due = (
                 source == "production"
                 and now.hour >= 7
@@ -5547,7 +5582,7 @@ class MainWindow(QMainWindow):
                 and status_value in {"waiting_wip", "retained"}
             )
             due = (
-                daily_full_due
+                waiting_source or daily_full_due or (source == 'production' and source in errors)
                 or retained_retry_due
                 or (source == "live" and inventory_bootstrap_due)
                 or refreshed is None
@@ -5557,7 +5592,7 @@ class MainWindow(QMainWindow):
                 1
                 if source == "aps" or waiting_wip
                 else 5
-                if retained_retry_due or (source == "live" and inventory_bootstrap_due)
+                if waiting_source or daily_full_due or (source == 'production' and source in errors) or retained_retry_due or (source == "live" and inventory_bootstrap_due)
                 else max(5, minutes)
             )
             retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
@@ -5988,7 +6023,7 @@ class MainWindow(QMainWindow):
                     self._reload_changed_data_views(changed)
                     QTimer.singleShot(1_000, self._run_scheduled_collections)
                     return
-        if (exit_code != 0 and not (exit_code == 2 and source in {'all','live'})) or forced_error:
+        if (exit_code != 0 and not (exit_code == 2 and source in {'all','live','production'})) or forced_error:
             error_parts = [part for part in (forced_error, captured, self.settings_collection_process.errorString()) if part]
             error = "\n\n".join(error_parts) or "수집기가 종료됐지만 오류 내용을 반환하지 않았습니다."
             self._record_collection_error(source, exit_code, error)
@@ -6007,7 +6042,7 @@ class MainWindow(QMainWindow):
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
-        if source in {"all", "live"}:
+        if source in {"all", "live", "production", "bom", "aps"}:
             full = self._read_refresh_status(
                 DATA_CENTER_DIR / "backward-v1" / "settings" / "full_refresh_status.json"
             )
@@ -6019,6 +6054,15 @@ class MainWindow(QMainWindow):
             )
             if source == "live" and full.get("results"):
                 full["results"]["live"] = {"status": inventory.get("status", "missing")}
+            if source != 'all' and full.get('app_version') == APP_VERSION and full.get('results'):
+                folders = {'production':'production-performance', 'bom':'bom',
+                           'aps':'backward-v1/process-status', 'live':'backward-v1/live-production-need'}
+                state = inventory if source == 'live' else self._read_refresh_status(DATA_CENTER_DIR / folders[source] / 'snapshot/refresh_status.json')
+                full['results'][source] = {'status':state.get('status', 'missing'), 'result':state}
+                report_path = DATA_CENTER_DIR / 'backward-v1/settings/full_refresh_status.json'
+                temporary_report = report_path.with_suffix('.tmp')
+                temporary_report.write_text(json.dumps(full,ensure_ascii=False,indent=2),encoding='utf-8')
+                temporary_report.replace(report_path)
             bootstrap_ok = _version_bootstrap_ready(full)
             if _version_base_ready(full):
                 target = DATA_CENTER_DIR / "backward-v1" / "settings" / "version_collection_bootstrap.json"
@@ -6051,6 +6095,8 @@ class MainWindow(QMainWindow):
                 self.live_need_page.calculation_status.setText(label)
                 self.lot_work_order_page.calculation_status.setText(label)
                 self.settings_data_status.setText(label)
+        if source == 'production' and exit_code == 2:
+            self.settings_data_status.setText('생산실적 서버 자료 대기 · 기존 자료 유지 · 약 5분 후 자동 확인')
         if source == "aps":
             QTimer.singleShot(250, lambda: self._start_data_collection("all", scheduled=True))
         QTimer.singleShot(1_000, self._run_scheduled_collections)

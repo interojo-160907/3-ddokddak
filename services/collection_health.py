@@ -34,6 +34,12 @@ def header_status(statuses: dict, errors: dict, details: dict) -> tuple[str, str
         reason = value.get("error_type") or ("HTTP " + str(value["http_status"]) if value.get("http_status") else "")
         descriptions.append(f"{names.get(name, name)}: {connection_label(value)} · {value.get('elapsed_seconds', '-')}초 · {reason} · 연속 실패 {value.get('consecutive_failures', 0)}회 · 확인 {value.get('checked_at', '-')} · 마지막 정상 {value.get('last_success_at') or '-'}")
     if not collected:
+        waiting = [names.get(key.removesuffix('_status'), key)
+                   for key, value in statuses.items() if isinstance(value, dict)
+                   and value.get('status') == 'waiting_source']
+        if waiting and not errors:
+            descriptions.insert(0, '서버 미수집 날짜는 0건으로 처리하지 않습니다. 기존 자료를 유지하며 자동 재확인합니다.')
+            return '서버 자료 대기 · ' + ', '.join(waiting), '\n'.join(descriptions), False
         bad = [names.get(key.removesuffix('_status'), key.removesuffix('_status'))
                for key in ('bom_status', 'aps_status', 'production_status', 'live_status')
                if statuses.get(key, {}).get('status') not in {'success', 'skipped'}]

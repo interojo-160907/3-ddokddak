@@ -7,6 +7,21 @@ from collectors import refresh_all
 
 
 class RefreshAllPriorityTests(unittest.TestCase):
+    def test_missing_production_day_is_pending_not_failed_and_others_continue(self):
+        reports=[]
+        import copy
+        with (
+            patch.object(refresh_all,'refresh_aps',return_value={'status':'success'}),
+            patch.object(refresh_all,'refresh_bom',return_value={'status':'success'}),
+            patch.object(refresh_all,'refresh_production',return_value={'status':'waiting_source'}),
+            patch.object(refresh_all,'refresh_live',return_value={'status':'success'}) as live,
+            patch.object(refresh_all,'_write_result',side_effect=lambda r:reports.append(copy.deepcopy(r))),
+            patch('builtins.print'),
+        ):
+            self.assertEqual(refresh_all.main(force_full=False),2)
+        live.assert_called_once()
+        self.assertEqual(reports[-1]['results']['production']['status'],'waiting_source')
+
     def test_aps_failure_preserves_independent_collections_and_blocks_live(self):
         with (
             patch.object(refresh_all, 'refresh_aps', side_effect=RuntimeError('slow APS')),

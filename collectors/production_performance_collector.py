@@ -227,9 +227,26 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
     now = datetime.now().astimezone()
     previous_status = _read_status()
     full_refresh = should_run_daily_full(
-        now, previous_status, database_exists=DB_PATH.is_file(), force_full=force_full
+        now, previous_status, database_exists=DB_PATH.is_file(),
+        force_full=force_full or bool(previous_status.get('pending_full_refresh'))
     )
     start = history_start if full_refresh else end - timedelta(days=6)
+    from services.dmz_read_client import route_to_dmz, missing_production_days
+    if route_to_dmz('/api/production-performance'):
+        missing = missing_production_days(start, end)
+        if missing:
+            # Preserve counts, the successful timestamp and daily-full marker.
+            # No raw download or database mutation occurs while coverage is absent.
+            result = dict(previous_status, status='waiting_source',
+                          checked_at=now.isoformat(timespec='seconds'),
+                          requested_from=start.isoformat(), requested_to=end.isoformat(),
+                          pending_full_refresh=full_refresh,
+                          missing_dates=missing,
+                          message='서버 생산실적 자료 대기 · 미수집 날짜 ' + ', '.join(missing)
+                                  + ' · 기존 자료 유지 · 약 5분 후 자동 확인',
+                          retry_after=(now + timedelta(minutes=5)).isoformat(timespec='seconds'))
+            _atomic_json(STATUS_PATH, result)
+            return result
     # 매일 07시 이후 첫 수집은 전월~당일 전체를 교체해 저장→확인·폐기
     # 상태 변경을 반영한다. 같은 날 이후 수집은 최근 7일만 갱신한다.
     # Full means the entire retained period, not one oversized monthly query.
@@ -349,8 +366,9 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--full", action="store_true", help="기존 DB가 있어도 전월~당일 전체 재수집")
     args = parser.parse_args()
-    print(json.dumps(refresh(args.api_key, args.timeout, force_full=args.full), ensure_ascii=False, indent=2))
-    return 0
+    result = refresh(args.api_key, args.timeout, force_full=args.full)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 2 if result.get('status') == 'waiting_source' else 0
 
 
 if __name__ == "__main__":
