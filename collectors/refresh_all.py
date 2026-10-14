@@ -63,19 +63,9 @@ def main(force_full: bool | None = None) -> int:
     # Finish APS first. Nested BOM/production workers share two network slots;
     # scheduling all sources at once starves queued requests before they start.
     for key, collect in base_collectors:
-        if key == 'bom':
-            from services.dmz_read_client import route_to_dmz, missing_calculation_sources
-            if route_to_dmz('/api/aps-plan'):
-                missing = missing_calculation_sources()
-                if missing:
-                    for remaining in ('bom','production','live'):
-                        report['results'][remaining] = {'status':'waiting_server',
-                            'message':'사내 서버 자료 준비 대기', 'missing_sources':missing}
-                    report['current_source']=''
-                    report['completed_at']=datetime.now().astimezone().isoformat(timespec='seconds')
-                    _write_result(report)
-                    print(json.dumps(report,ensure_ascii=False,default=str))
-                    return 2
+        # APS/BOM/production do not depend on the five WIP warehouses.
+        # Each collector validates its own inputs; only the live calculation
+        # waits for a complete matching WIP generation, keeping its old DB.
         report["current_source"] = key
         _write_result(report)
         try:

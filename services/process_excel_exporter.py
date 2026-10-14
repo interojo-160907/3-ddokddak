@@ -51,6 +51,12 @@ def _number(value: object) -> int | float:
         return 0
 
 
+def _order_quantity(row: dict) -> int | float | None:
+    """규격별 PCS 오더수량. 미확인 수량은 0으로 대체하지 않는다."""
+    value = row.get("오더수량PCS")
+    return None if value is None else _number(value)
+
+
 def _order_list(row: dict) -> list[str]:
     values = str(row.get("_수주목록") or "").splitlines()
     if not values and row.get("수주번호"):
@@ -86,6 +92,7 @@ def build_process_export_payload(
         ("ADD", "ADD"),
         ("납기일", "납기일"),
         *((column, column) for column in stage_columns),
+        ("오더수량", "오더수량PCS"),
         *(
             spec
             for code in hidden_codes
@@ -95,14 +102,15 @@ def build_process_export_payload(
     detail_columns = tuple(header for header, _source in detail_specs)
     detail_values = [
         [
-            _number(row.get(source)) if header in stage_columns else str(row.get(source) or "")
+            _order_quantity(row) if header == "오더수량"
+            else _number(row.get(source)) if header in stage_columns else str(row.get(source) or "")
             for header, source in detail_specs
         ]
         for row in detail_rows
     ]
     compact_columns = (
         "신규분류요약", dedicated_code, dedicated_name, "POWER", "CP", "AXIS", "ADD",
-        "최우선 납기일", "수주 건수", "수주번호 목록", f"{process} 부족수량",
+        "최우선 납기일", "수주 건수", "수주번호 목록", f"{process} 부족수량", "오더수량",
     )
     compact_values = []
     for row in compact_rows:
@@ -119,6 +127,7 @@ def build_process_export_payload(
             len(orders),
             " / ".join(orders),
             _number(row.get("공정", {}).get(process, 0)),
+            _order_quantity(row),
         ])
     return {
         "title": f"{datetime.now():%y%m%d} {PROCESS_EXPORT_NAME[process]}",
@@ -154,7 +163,7 @@ def build_overview_export_payload(
         return [_number(process.get(name)) for name in PROCESS_ORDER]
 
     order_columns = (
-        "신규분류요약", "이니셜", "수주번호", "품명", "최우선 납기일", *PROCESS_ORDER,
+        "신규분류요약", "이니셜", "수주번호", "품명", "최우선 납기일", *PROCESS_ORDER, "오더수량",
     )
     order_values = [
         [
@@ -164,13 +173,14 @@ def build_overview_export_payload(
             str(row.get("품명") or ""),
             str(row.get("납기일") or ""),
             *process_values(row),
+            _order_quantity(row),
         ]
         for row in order_rows
     ]
 
     product_columns = (
         "신규분류요약", "이니셜", "수주번호", "품명",
-        "POWER", "CP", "AXIS", "ADD", "최우선 납기일", *PROCESS_ORDER,
+        "POWER", "CP", "AXIS", "ADD", "최우선 납기일", *PROCESS_ORDER, "오더수량",
     )
     product_values = [
         [
@@ -184,6 +194,7 @@ def build_overview_export_payload(
             str(row.get("ADD") or ""),
             str(row.get("납기일") or ""),
             *process_values(row),
+            _order_quantity(row),
         ]
         for row in product_rows
     ]
@@ -199,6 +210,7 @@ def build_overview_export_payload(
         ("ADD", "ADD"),
         ("납기일", "납기일"),
         *((process, process) for process in PROCESS_ORDER),
+        ("오더수량", "오더수량PCS"),
     ]
     # 개별 공정 내보내기와 동일하게 보이는 핵심 열을 먼저 배치하고,
     # 필요할 때 Excel에서 펼쳐볼 코드·품명 열은 표의 맨 오른쪽에 둔다.
@@ -212,7 +224,8 @@ def build_overview_export_payload(
     detail_columns = tuple(header for header, _source in detail_specs)
     detail_values = [
         [
-            _number((row.get("공정") or {}).get(source))
+            _order_quantity(row) if header == "오더수량"
+            else _number((row.get("공정") or {}).get(source))
             if header in PROCESS_ORDER
             else str(row.get(source) or "")
             for header, source in detail_specs
@@ -470,7 +483,9 @@ def _write_sheet(workbook, payload: dict, title: str, note: str, table_index: in
         for column_index, header in enumerate(columns):
             value = row[column_index] if column_index < len(row) else ""
             parsed_date = _excel_date(value) if "납기일" in header else None
-            if parsed_date is not None:
+            if header == "오더수량" and value is None:
+                worksheet.write_blank(row_index, column_index, None, number_format)
+            elif parsed_date is not None:
                 worksheet.write_datetime(row_index, column_index, parsed_date, date_format)
             elif "수량" in header or header in numeric_headers:
                 worksheet.write_number(row_index, column_index, _number(value), number_format)

@@ -238,7 +238,10 @@ def _refresh_snapshot(api_key, timeout, before):
     if arrange.get("truncated") or not arrange.get("rows"):
         raise RuntimeError("기계등록 전체 정보를 확인할 수 없습니다.")
     meta_after = outbound_state(_request("/api/aps-outbound-status", {"limit": 0}, api_key, timeout))
-    if before != meta_after:
+    # WIP can finish publishing while APS is being read. Only APS inputs
+    # determine whether this snapshot changed during collection.
+    aps_keys = ('source_identity', 'run_key', 'backward_at', 'backward_count', 'plan_at', 'plan_count')
+    if any(before.get(key) != meta_after.get(key) for key in aps_keys):
         raise RuntimeError("APS 수집 도중 아웃바운드 회차가 변경되었습니다.")
     validate_payload(payload, meta_after, "backward")
     validate_payload(plan, meta_after, "plan")

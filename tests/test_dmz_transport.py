@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -131,22 +132,25 @@ class DmzTransportTests(unittest.TestCase):
         self.assertTrue(dmz._valid_rows(rows,s))
         self.assertFalse(dmz._valid_rows([{'qty':10}],s))
 
-    def test_aps_update_waits_for_server_inputs_without_source_collection(self):
+    def test_wip_wait_does_not_block_base_snapshots(self):
         from collectors import refresh_all
         with tempfile.TemporaryDirectory() as directory, \
              patch('services.collection_lock.resolve_data_root',return_value=Path(directory)), \
              patch.object(refresh_all,'RESULT_PATH',Path(directory)/'report.json'), \
              patch.object(refresh_all,'refresh_aps_full',return_value={'status':'success'}), \
-             patch.object(refresh_all,'refresh_bom') as bom, \
-             patch.object(refresh_all,'refresh_production') as production, \
-             patch.object(refresh_all,'refresh_live') as live, \
+             patch.object(refresh_all,'refresh_bom',return_value={'status':'success'}) as bom, \
+             patch.object(refresh_all,'refresh_production',return_value={'status':'success'}) as production, \
+             patch.object(refresh_all,'refresh_live',return_value={'status':'waiting_wip'}) as live, \
              patch.dict(os.environ,{'DDOKDDAK_PROD3_TRANSPORT':'dmz'}), \
              patch.object(dmz,'missing_calculation_sources',return_value=['/api/aps-wip']), \
              patch('builtins.print'):
             self.assertEqual(refresh_all.main(force_full=True),2)
-            bom.assert_not_called()
-            production.assert_not_called()
-            live.assert_not_called()
+            bom.assert_called_once()
+            production.assert_called_once()
+            live.assert_called_once()
+            report=json.loads((Path(directory)/'report.json').read_text(encoding='utf-8'))
+            self.assertEqual(report['results']['aps']['status'],'success')
+            self.assertEqual(report['results']['live']['status'],'waiting_wip')
 
 
 if __name__=='__main__': unittest.main()

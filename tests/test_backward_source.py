@@ -139,6 +139,27 @@ class BackwardCycleTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             outbound_state({"rows": [{"tbl": "RUN", "run_state": "R", "run_key": "run"}]})
 
+    def test_wip_publication_during_aps_collection_does_not_invalidate_aps(self):
+        before = self.state()
+        after = dict(before, wip_at="2026-10-12 08:00:00", wip_count=2)
+        backward = {"rows": [{}], "source_refreshed_at": before["backward_at"]}
+        plan = {"rows": [{}], "source_refreshed_at": before["plan_at"]}
+        with patch.object(collector, "_request", side_effect=[backward, plan, {"rows": [{}]}, {}]), \
+             patch.object(collector, "outbound_state", return_value=after), \
+             patch.object(collector, "adapt", side_effect=RuntimeError("APS inputs validated")):
+            with self.assertRaisesRegex(RuntimeError, "APS inputs validated"):
+                collector._refresh_snapshot("", 30, before)
+
+    def test_plan_publication_during_aps_collection_still_rejects_mixed_inputs(self):
+        before = self.state()
+        after = dict(before, plan_at="2026-10-12 08:00:00")
+        with patch.object(collector, "_request", side_effect=[{}, {}, {"rows": [{}]}, {}]), \
+             patch.object(collector, "outbound_state", return_value=after), \
+             patch.object(collector, "adapt") as adapt_rows:
+            with self.assertRaisesRegex(RuntimeError, "회차가 변경"):
+                collector._refresh_snapshot("", 30, before)
+            adapt_rows.assert_not_called()
+
     def test_same_timestamp_plan_source_forces_first_recollection(self):
         state = self.state()
         with patch.object(monitor, "_local_status", return_value={"status": "success", "source_refreshed_at": state["backward_at"]}), \

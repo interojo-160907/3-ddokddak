@@ -1,5 +1,5 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "3.1.3"
+#define MyAppVersion "3.1.4"
 #define MyAppExeName "gui_app_pyside6.exe"
 #ifndef MySourceDir
   #define MySourceDir "..\dist\production3"
