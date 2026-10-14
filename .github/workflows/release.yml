@@ -144,7 +144,7 @@ jobs:
           $asset = "installer\output\ddokddak-production3-setup.exe"
           $hash = "$asset.sha256"
           $scriptAsset = "installer/output/Google-Management-Code-$($env:TAG_NAME.TrimStart('v')).txt"
-          $publicationFlags = if (Test-Path "management/SERVER_READ_ROLLOUT_PENDING") { @("--prerelease", "--latest=false") } else { @("--latest") }
+          $publicationFlags = @(if (Test-Path "management/SERVER_READ_ROLLOUT_PENDING") { "--prerelease"; "--latest=false" } else { "--latest" })
           gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY 2>$null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG_NAME $asset $hash $scriptAsset --clobber --repo $env:GITHUB_REPOSITORY
