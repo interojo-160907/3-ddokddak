@@ -38,7 +38,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
         "누수규격": "live_leak",
     }
 
-    def __init__(self, parent=None, *, fixed_process: str | None = None) -> None:
+    def __init__(self, parent=None, *, fixed_process: str | None = None, initial_rows=None) -> None:
         # APS 화면과 필터·표시·동작을 공유하고 데이터 서비스만 아래에서 교체한다.
         super().__init__(
             parent,
@@ -80,7 +80,10 @@ class LiveProductionNeedPage(ProcessOverviewPage):
             )
             card.set_clickable(True, f"{process_name} 공정만 보기")
 
-        self.reload_data()
+        if initial_rows is None:self.reload_data()
+        else:
+            self.load_normalized_rows(initial_rows)
+            self._show_cycle_status()
 
     def _export_excel(self) -> None:
         if self.fixed_process:

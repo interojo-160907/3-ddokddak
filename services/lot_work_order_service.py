@@ -82,20 +82,8 @@ class LotWorkOrderService:
         )
 
     def signature(self) -> tuple[int, int] | None:
-        signatures = []
-        for path in (
-            self.database_path,
-            self.production_database_path,
-            self.bom_database_path,
-        ):
-            try:
-                stat = path.stat()
-                signatures.append((stat.st_size, stat.st_mtime_ns))
-            except OSError:
-                continue
-        if not signatures:
-            return None
-        return sum(item[0] for item in signatures), max(item[1] for item in signatures)
+        from services.local_read_cache import signature
+        return signature((self.database_path,self.production_database_path,self.bom_database_path))
 
     def _bom_code_metadata(self, prefix: str) -> dict[str, dict[str, str]]:
         """BOM 제품명 마스터의 공정 기본코드 기준 품명·신규분류를 읽는다."""
@@ -175,6 +163,14 @@ class LotWorkOrderService:
         return match.group(1).upper() if match else ""
 
     def load_rows(
+        self, process: str, *, allocation_mode: str = "whole", markets: set[str] | None = None,
+    ) -> list[dict]:
+        from services.local_read_cache import read
+        return read((self.database_path,self.production_database_path,self.bom_database_path),
+                    ('lot',process,allocation_mode,None if markets is None else tuple(sorted(markets))),
+                    lambda:self._read_rows(process,allocation_mode=allocation_mode,markets=markets))
+
+    def _read_rows(
         self,
         process: str,
         *,

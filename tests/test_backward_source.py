@@ -174,6 +174,21 @@ class BackwardCycleTests(unittest.TestCase):
             self.assertEqual(live.refresh()["status"], "waiting_wip")
             collect.assert_not_called()
 
+    def test_new_wip_for_same_backward_run_rebuilds_baseline(self):
+        state=self.state()
+        old={'aps_source_refreshed_at':state['backward_at'],'source_identity':state['source_identity'],
+             'wip_source_refreshed_at':'2000-01-01 08:00:00','calculation_revision':2}
+        with patch.object(live,'_aps_cycle',return_value=state['backward_at']), \
+             patch.object(live,'_source_provenance',return_value=state), \
+             patch.object(live,'_live_meta',return_value=old), \
+             patch.object(live,'_read_json',return_value=old), \
+             patch.object(live,'_aps_item_ids',return_value={'P1'}), \
+             patch.object(live,'probe_wip_source',return_value={'ready':True,'source_refreshed_at':state['wip_at']}), \
+             patch.object(live,'_collect_inventory',side_effect=AssertionError('WIP must be updated first')), \
+             patch.object(live,'_collect_wip',side_effect=RuntimeError('new-wip-baseline')) as collect:
+            with self.assertRaisesRegex(RuntimeError,'new-wip-baseline'):live.refresh()
+            collect.assert_called_once()
+
     def test_mapping_revision_rebuilds_with_matching_unchanged_wip(self):
         state = self.state()
         old = {"source_kind": "aps-backward-plan:v1", "source_identity": "old-mapping",

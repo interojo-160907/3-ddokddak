@@ -1,7 +1,9 @@
 #define MyAppName "똑딱이 생산3팀 납기 통합조회"
-#define MyAppVersion "2.9.6"
+#define MyAppVersion "2.9.7"
 #define MyAppExeName "gui_app_pyside6.exe"
-#define MySourceDir "..\dist\production3"
+#ifndef MySourceDir
+  #define MySourceDir "..\dist\production3"
+#endif
 
 [Setup]
 AppId={{B6E3E4AE-D430-4A48-9C98-3FD042E4C4A9}

@@ -6,6 +6,9 @@ from pathlib import Path
 
 
 def run(report_path: str) -> int:
+    import psycopg
+    import psycopg_binary
+    from services import server_read_settings,local_read_cache
     import numpy
     from openpyxl import Workbook
     from PySide6.QtWidgets import QApplication, QWidget

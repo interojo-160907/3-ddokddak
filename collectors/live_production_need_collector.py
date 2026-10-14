@@ -873,7 +873,8 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
         previous_revision = 0
     # 0.1.21의 이전 계산 DB는 새 회차 첫 수집값을 기준선에도 복사했다.
     # 같은 APS 회차여도 개정 전 결과라면 한 번 재초기화해 최신값을 온전히 반영한다.
-    new_cycle = force_full or aps_changed or previous_revision != CALCULATION_REVISION
+    wip_changed = bool(expected_wip and expected_wip > str(previous_meta.get('wip_source_refreshed_at') or ''))
+    new_cycle = force_full or aps_changed or wip_changed or previous_revision != CALCULATION_REVISION
     target_items = _aps_item_ids()
     if not target_items:
         raise RuntimeError("현재 APS 회차의 생산 품목코드가 없습니다.")

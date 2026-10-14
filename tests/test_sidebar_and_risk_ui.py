@@ -158,6 +158,8 @@ class SidebarAndRiskUiTest(unittest.TestCase):
         window.live_need_page.reload_data.assert_called_once_with()
         window.inventory_page.reload_data.assert_called_once_with()
         window.lot_work_order_page.reload_data.assert_called_once_with()
+        window.lot_fixed_process_pages["lot_hydration"].reload_data.assert_not_called()
+        window._deferred_page_refresh.pop('lot_hydration')()
         window.lot_fixed_process_pages["lot_hydration"].reload_data.assert_called_once_with()
         window.deleteLater()
 
@@ -166,7 +168,7 @@ class SidebarAndRiskUiTest(unittest.TestCase):
         window.collection_schedule = {
             "bom_minutes": 60,
             "aps_minutes": 1,
-            "production_minutes": 60,
+            "production_minutes": 5,
             "live_minutes": 60,
             "hydration_minutes": 0,
         }
@@ -180,6 +182,9 @@ class SidebarAndRiskUiTest(unittest.TestCase):
 
         self.assertEqual(0, page.horizontalScrollBar().maximum())
         self.assertTrue(window.settings_data_status.wordWrap())
+        self.assertEqual(window.collection_controls['production']['schedule'].currentData(),5)
+        self.assertEqual(window.collection_controls['production']['schedule'].currentText(),'5분')
+        self.assertFalse(any(label.text()=='이전 버전 복구' for label in page.findChildren(QLabel)))
         page.deleteLater()
         window.deleteLater()
 

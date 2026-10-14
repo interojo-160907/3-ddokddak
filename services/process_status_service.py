@@ -158,6 +158,11 @@ class ProcessStatusService:
             return {}
 
     def load_rows(self, search: str = "", process: str = "전체") -> list[dict]:
+        from services.local_read_cache import read
+        return read((self.database_path,),('process',search,process),
+                    lambda:self._read_rows(search,process))
+
+    def _read_rows(self, search: str = "", process: str = "전체") -> list[dict]:
         if not self.database_path.is_file():
             return []
         connection = sqlite3.connect(

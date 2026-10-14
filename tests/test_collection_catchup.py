@@ -83,6 +83,19 @@ class ProductionCatchupTests(unittest.TestCase):
 
 
 class SchedulerCatchupTests(unittest.TestCase):
+    def test_simultaneous_aps_and_wip_changes_start_one_full_refresh(self):
+        import json
+        window=self._window()
+        window.aps_monitor_process=Mock()
+        window.aps_monitor_process.readAllStandardOutput.return_value=json.dumps(
+            {'changed':True,'wip_metadata_changed':True}).encode()
+        window.data_status=Mock();window._current_data_db_signatures=Mock(return_value={})
+        window._current_data_status_signatures=Mock(return_value={})
+        window._reload_changed_data_views=Mock();window.show_page=Mock();window._active_nav_key='live_need'
+        with patch('ui.main_window.QTimer.singleShot',side_effect=lambda delay,callback:callback()):
+            MainWindow._aps_monitor_finished(window,0,None)
+        window._start_data_collection.assert_called_once_with('all',scheduled=True)
+
     def test_user_cancellation_defers_automatic_restart(self):
         window=self._window()
         window._collection_resume_at=datetime.now()+timedelta(minutes=5)

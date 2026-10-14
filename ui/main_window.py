@@ -1477,7 +1477,7 @@ class MainWindow(QMainWindow):
             if hasattr(self, "live_need_page"):
                 self.live_need_page._show_cycle_status()
             if hasattr(self, "lot_work_order_page"):
-                self.lot_work_order_page.reload_data()
+                self.lot_work_order_page.refresh_calculation_status()
             self._refresh_settings_data_status()
             self._refresh_header_status()
 
@@ -1506,22 +1506,22 @@ class MainWindow(QMainWindow):
             self.live_need_page.reload_data()
             if hasattr(self, 'inventory_page'):
                 self.inventory_page.reload_data()
-            for page in getattr(self, "live_fixed_process_pages", {}).values():
-                page.reload_data()
+            for key,page in getattr(self, "live_fixed_process_pages", {}).items():
+                self._refresh_or_defer_page(key,page.reload_data)
             if hasattr(self, "lot_work_order_page"):
                 self.lot_work_order_page.reload_data()
-            for page in getattr(self, "lot_fixed_process_pages", {}).values():
-                page.reload_data()
+            for key,page in getattr(self, "lot_fixed_process_pages", {}).items():
+                self._refresh_or_defer_page(key,page.reload_data)
         elif "production" in changed:
             # 사출 작업순서는 생산실적 DB의 진행 중 체크시트(LOT)를 사용한다.
             injection_page = getattr(self, "lot_fixed_process_pages", {}).get("lot_injection")
             if injection_page is not None:
-                injection_page.reload_data()
+                self._refresh_or_defer_page('lot_injection',injection_page.reload_data)
         if "bom" in changed and hasattr(self, "bom_page"):
-            self.bom_page.refresh()
+            self._refresh_or_defer_page('bom',self.bom_page.refresh)
             injection_page = getattr(self, "lot_fixed_process_pages", {}).get("lot_injection")
             if injection_page is not None:
-                injection_page.reload_data()
+                self._refresh_or_defer_page('lot_injection',injection_page.reload_data)
         self._refresh_settings_data_status()
         self._refresh_header_status()
 
@@ -1571,9 +1571,9 @@ class MainWindow(QMainWindow):
         self.data_status.setToolTip(
             "APS 원천 갱신을 1분마다 확인합니다. 변경 시 전체 원천과 통합 계산을 자동 갱신합니다."
         )
-        if result.get('wip_metadata_changed'):
-            QTimer.singleShot(250, lambda: self._start_data_collection('live', scheduled=True))
         if not result.get("changed"):
+            if result.get('wip_metadata_changed'):
+                QTimer.singleShot(250, lambda: self._start_data_collection('live', scheduled=True))
             return
 
         self._data_db_signatures = self._current_data_db_signatures()
@@ -2086,11 +2086,21 @@ class MainWindow(QMainWindow):
     def _add_page(self, key: str, page: QWidget) -> None:
         self.page_indexes[key] = self.stack.addWidget(page)
 
+    def _refresh_or_defer_page(self, key: str, refresh) -> None:
+        if not hasattr(self,'_deferred_page_refresh'):self._deferred_page_refresh={}
+        if key==getattr(self,'_active_nav_key',''):
+            self._deferred_page_refresh.pop(key,None)
+            refresh()
+        else:
+            self._deferred_page_refresh[key]=refresh
+
     def show_page(self, key: str) -> None:
         if getattr(self, '_current_page', '') in ('process_overview', 'live_need'):
             self._inventory_filter_source = self._current_page
         if safe_mode.active() and (key in {"live_need", "lot_work_order"} or key in self.LIVE_PROCESS_NAV or key in self.LOT_PROCESS_NAV):
             key = "process_overview"
+        refresh=getattr(self,'_deferred_page_refresh',{}).pop(key,None)
+        if refresh is not None:refresh()
         requested_key = key
         actual_key = key
         definition_key = (
@@ -3428,7 +3438,7 @@ class MainWindow(QMainWindow):
         return self.live_need_page
 
     def _build_live_process_page(self, process_name: str) -> QWidget:
-        page = LiveProductionNeedPage(fixed_process=process_name)
+        page = LiveProductionNeedPage(fixed_process=process_name,initial_rows=self.live_need_page.all_rows)
         page.refresh_requested.connect(lambda: self._start_data_collection("live"))
         page.process_requested.connect(self.show_page)
         return page
@@ -4895,10 +4905,6 @@ class MainWindow(QMainWindow):
         def download_latest_installer() -> None:
             QDesktopServices.openUrl(QUrl(DEFAULT_UPDATE_URL))
 
-        def open_recovery_release() -> None:
-            QDesktopServices.openUrl(QUrl(
-                "https://github.com/interojo-160907/3-ddokddak/releases/tag/v2.7.10"))
-
         cards = (
             (
                 "로컬 데이터 저장소",
@@ -4931,13 +4937,6 @@ class MainWindow(QMainWindow):
                 f"현재 버전 {APP_VERSION}",
                 "업데이트 확인",
                 check_program_update,
-            ),
-            (
-                "이전 버전 복구",
-                "2.7.10(2.6.4 기능)으로 복구할 수 있습니다. 관리시트 버전과 설치 주소를 먼저 2.7.10으로 되돌린 뒤 프로그램을 종료하고 복구 설치파일을 실행하세요.",
-                "기존 데이터 폴더 유지 · 2.7.10 고정 복구 페이지",
-                "복구 페이지 열기",
-                open_recovery_release,
             ),
         )
         for index, (title, description, value, action, callback) in enumerate(cards):
@@ -5056,7 +5055,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "자동·전체 갱신은 사내 서버 저장 자료를 받습니다. 실시간·LOT 수동 갱신은 WIP를 서버에서 받고, 실적·수불·수화 지시만 원본에서 조회합니다."
+            "설치·업데이트 후 첫 실행은 전체 재수집합니다. 이후 선택 주기로 갱신하며, APS 자동 수집은 Backward 원천 변경 시 갱신합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5121,6 +5120,9 @@ class MainWindow(QMainWindow):
                 schedule.addItem(label, minutes)
             wanted = int(self.collection_schedule.get(f"{key}_minutes", 0))
             selected = schedule.findData(wanted)
+            if selected < 0:
+                schedule.addItem(f"{wanted}분", wanted)
+                selected = schedule.findData(wanted)
             schedule.setCurrentIndex(selected if selected >= 0 else 0)
             schedule.currentIndexChanged.connect(
                 lambda _index, source=key, combo=schedule: self._collection_schedule_changed(source, combo)

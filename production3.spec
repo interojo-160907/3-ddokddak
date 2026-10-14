@@ -33,7 +33,10 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    # Optional analysis libraries installed on a developer PC are not runtime
+    # dependencies. Keep them out of the employee installer.
+    excludes=["pandas","scipy","matplotlib","IPython","pyarrow","numba",
+              "llvmlite","fsspec","sympy","torch","tensorflow","plotly","seaborn"],
     noarchive=False,
     optimize=0,
 )
