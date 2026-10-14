@@ -39,15 +39,16 @@ def validate_shared_reader(dsn):
                 'collector_hub.snapshot','collector_hub.snapshot_record','collector_hub.raw_payload')
         with psycopg.connect(dsn,connect_timeout=8,
                 options='-c default_transaction_read_only=on -c statement_timeout=10000') as c:
+            if c.execute('SHOW transaction_read_only').fetchone()[0] != 'on':
+                raise ValueError()
             for table in tables:
-                readable,writable=c.execute('''SELECT has_table_privilege(current_user,%s,'SELECT'),
-                    has_table_privilege(current_user,%s,'INSERT,UPDATE,DELETE,TRUNCATE')''',
-                    (table,table)).fetchone()
-                if not readable or writable: raise ValueError()
+                readable=c.execute("SELECT has_table_privilege(current_user,%s,'SELECT')",
+                    (table,)).fetchone()[0]
+                if not readable: raise ValueError()
             if not c.execute("SELECT has_table_privilege(current_user,'scm_client.snapshot_scope','SELECT')").fetchone()[0]:
                 raise ValueError()
     except Exception:
-        raise RuntimeError('공통 서버 연결은 생산3팀 조회용 읽기 전용 계정으로 설정해야 합니다.') from None
+        raise RuntimeError('공통 서버 접속정보와 자료 조회 권한을 확인하지 못했습니다.') from None
 
 
 def _provision(gate):

@@ -98,9 +98,9 @@ class UpgradeTests(unittest.TestCase):
 
     def test_version_metadata_is_consistent(self):
         root = Path(__file__).resolve().parents[1]
-        self.assertEqual(APP_VERSION, '2.9.8')
-        self.assertIn('"2.9.8"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
-        self.assertIn('filevers=(2, 9, 8, 0)', (root/'installer/version_info.txt').read_text(encoding='utf-8'))
+        self.assertEqual(APP_VERSION, '2.9.9')
+        self.assertIn('"2.9.9"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
+        self.assertIn('filevers=(2, 9, 9, 0)', (root/'installer/version_info.txt').read_text(encoding='utf-8'))
         self.assertNotIn('DelTree(', (root/'installer/production3.iss').read_text(encoding='utf-8'))
         self.assertIn('if not UninstallSilent then MsgBox(', (root/'installer/production3.iss').read_text(encoding='utf-8'))
 

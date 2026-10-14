@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch,Mock
+from unittest.mock import patch,Mock,MagicMock
 from services import server_read_settings as settings
 
 
@@ -51,6 +51,27 @@ class ServerSettingsTests(unittest.TestCase):
              patch.object(settings.requests,'post',return_value=reply):
             with self.assertRaisesRegex(RuntimeError,'기존 로컬 자료'): settings.resolve_connection()
             save.assert_not_called()
+
+    def test_existing_account_is_accepted_but_connection_is_read_only(self):
+        connection=MagicMock()
+        connection.__enter__.return_value=connection
+        connection.execute.side_effect=lambda sql,*args: Mock(fetchone=lambda: ('on',) if sql.startswith('SHOW') else (True,))
+        with patch('psycopg.connect',return_value=connection) as connect:
+            settings.validate_shared_reader('host=192.168.2.29 dbname=sangho_db user=existing')
+        self.assertIn('default_transaction_read_only=on',connect.call_args.kwargs['options'])
+        for call in connection.execute.call_args_list:
+            self.assertNotIn('INSERT,UPDATE,DELETE,TRUNCATE',call.args[0])
+
+    def test_wrong_server_and_non_read_only_session_are_rejected(self):
+        with patch('psycopg.connect') as connect:
+            with self.assertRaises(RuntimeError):
+                settings.validate_shared_reader('host=other dbname=sangho_db')
+            connect.assert_not_called()
+        connection=MagicMock();connection.__enter__.return_value=connection
+        connection.execute.return_value.fetchone.return_value=('off',)
+        with patch('psycopg.connect',return_value=connection):
+            with self.assertRaises(RuntimeError):
+                settings.validate_shared_reader('host=192.168.2.29 dbname=sangho_db')
 
 
 if __name__=='__main__': unittest.main()
