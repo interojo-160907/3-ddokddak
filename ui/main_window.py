@@ -1291,6 +1291,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[str, SidebarNavButton] = {}
         self.collection_schedule = load_schedule()
         self._collection_last_attempt: dict[str, datetime] = {}
+        self._startup_collection_pending = True
         self._current_page = "dashboard"
         self._active_nav_key = "dashboard"
         self._force_close = False
@@ -2234,6 +2235,12 @@ class MainWindow(QMainWindow):
                            else '수집 준비 중 · 재고·수화 최초 갱신 대기')
             status_tip = "업데이트 후 최초 통합 갱신을 자동으로 시작합니다. 완료 전에는 마지막 정상 데이터를 유지합니다."
             api_collection_ready = False
+        if api_collection_ready:
+            from services.collection_health import freshness_note
+            note = freshness_note('production', self.dashboard_data.get('production_status', {}),
+                                  datetime.now(), startup_pending=getattr(self, '_startup_collection_pending', False))
+            if note:
+                status_text, status_tip, api_collection_ready = note, '설정 및 운영에서 자료 반영 시각과 마지막 확인 시각을 확인하세요.', False
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText("●  " + status_text)
         self.data_status.setToolTip(status_tip)
@@ -5077,7 +5084,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "설치·업데이트 후 첫 실행은 전체 재수집합니다. 이후 선택 주기로 갱신하며, APS 자동 수집은 Backward 원천 변경 시 갱신합니다."
+            "프로그램을 켤 때마다 한 번 동기화한 뒤 선택 주기로 갱신합니다. 여러 PC의 동시 접속을 줄이기 위해 시작은 0~3분 분산됩니다. APS·WIP는 회차와 준비 상태를 확인합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5086,7 +5093,7 @@ class MainWindow(QMainWindow):
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
-        for column, text in enumerate(("데이터", "접속 상태", "현재 상태", "마지막 갱신", "저장 건수", "자동 주기", "수동 실행")):
+        for column, text in enumerate(("데이터", "접속 상태", "현재 상태", "반영 / 확인 시각", "저장 건수", "자동 주기", "수동 실행")):
             label = QLabel(text)
             label.setObjectName("CollectionHeader")
             grid.addWidget(label, 0, column)
@@ -5362,6 +5369,8 @@ class MainWindow(QMainWindow):
         )
         parts = []
         collection_errors = self._read_collection_errors()
+        batch = self._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings/full_refresh_status.json')
+        inventory_cycle = self._read_refresh_status(INVENTORY_STATUS_DATA_DIR / 'refresh_status.json')
         for key, name, path, count_keys in definitions:
             status = self._read_refresh_status(path)
             counts = [int(status[key]) for key in count_keys if status.get(key) is not None]
@@ -5401,6 +5410,14 @@ class MainWindow(QMainWindow):
                     state_text += f" · WIP {wip_clock}" if wip_clock else " · 계산 완료"
                 if key == "hydration":
                     state_text = "● 정상 · 동시 수집" if status_value == "success" else "● API 미연결"
+                    success = status_value == 'success'
+                from services.collection_health import freshness_note
+                note = freshness_note(key, status, datetime.now(),
+                                      startup_pending=getattr(self, '_startup_collection_pending', False),
+                                      inventory_cycle=inventory_cycle)
+                if note and not has_error:
+                    state_text = '● ' + note
+                    success = False
                 controls["state"].setText(state_text)
                 controls["state"].setProperty("state", "success" if success else "warning")
                 controls["state"].style().unpolish(controls["state"])
@@ -5409,12 +5426,19 @@ class MainWindow(QMainWindow):
                 controls["error_button"].setToolTip(
                     str(error_info.get("message") or "")[:500] if has_error else ""
                 )
-                controls["refreshed"].setText(str(refreshed).replace("T", " ")[:19])
+                checked = status.get('checked_at') or (batch.get('results', {}).get(key, {}).get('completed_at')) or local_refreshed
+                if key == 'hydration':
+                    checked = inventory_cycle.get('completed_at') or checked
+                time_label = '원천' if key == 'aps' else '반영'
+                controls["refreshed"].setText(
+                    f"{time_label} {str(refreshed).replace('T', ' ')[:19]}\n"
+                    f"확인 {str(checked).replace('T', ' ')[:19]}"
+                )
                 if key == "aps":
                     controls["refreshed"].setToolTip(
                         f"APS 원천 갱신 {source_refreshed or '-'}\n"
                         f"로컬 수집 {local_refreshed}\n"
-                        f"마지막 확인 {status.get('checked_at') or local_refreshed}"
+                        f"마지막 확인 {checked}"
                     )
                 controls["rows"].setText(f"{count_text}건" if count_text else "-")
                 if key == "production":
@@ -5425,6 +5449,7 @@ class MainWindow(QMainWindow):
                     )
                 if key == "live":
                     controls["state"].setToolTip(
+                        f"{status.get('retained_reason') or status.get('message') or ''}\n"
                         f"APS 기준 {status.get('aps_source_refreshed_at') or '-'}\n"
                         f"WIP 기준 {status.get('wip_source_refreshed_at') or '-'}\n"
                         f"WIP 마지막 확인 {status.get('wip_checked_at') or '-'}\n"
@@ -5434,7 +5459,7 @@ class MainWindow(QMainWindow):
                     connected = status_value == "success"
                     controls["connection"].setText("● 원활" if connected else "● 연결 대기")
                     controls["connection"].setStyleSheet("color:#059669;font-weight:800;" if connected else "color:#d97706;font-weight:800;")
-                    controls["state"].setToolTip("수화 지시는 4개 표시 창고 재고와 동시에 수집되고, 모든 입력 완료 후 부족량을 계산합니다.")
+                    controls["state"].setToolTip(str((inventory_cycle.get("hydration") or {}).get("error") or "") + "\n수화 지시는 4개 표시 창고 재고와 동시에 수집되고, 모든 입력 완료 후 부족량을 계산합니다.")
         self.settings_data_status.setText("  |  ".join(parts))
 
     def _collection_schedule_changed(self, source: str, combo: QComboBox) -> None:
@@ -5523,12 +5548,15 @@ class MainWindow(QMainWindow):
         bootstrap = self._read_refresh_status(bootstrap_path)
         from services.collection_distribution import retry_blocked
         errors = self._read_collection_errors() if hasattr(self, "_read_collection_errors") else {}
+        if getattr(self, '_startup_collection_pending', False):
+            if not retry_blocked(errors, 'all', now):
+                self._start_data_collection('all', scheduled=True)
+            return
         if str(bootstrap.get("completed_version") or "") != APP_VERSION:
             if retry_blocked(errors, "all", now):
                 return
             attempted = self._collection_last_attempt.get("version_bootstrap")
             if attempted is None or (now - attempted) >= timedelta(minutes=5):
-                self._collection_last_attempt["version_bootstrap"] = now
                 source = "live" if bootstrap.get("base_completed_version") == APP_VERSION else "all"
                 if source == 'all':
                     report = self._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings/full_refresh_status.json')
@@ -5537,6 +5565,7 @@ class MainWindow(QMainWindow):
                     state = self._read_refresh_status(DATA_CENTER_DIR / 'production-performance/snapshot/refresh_status.json')
                     if state.get('status') == 'waiting_source' and not _source_wait_due(state, now):
                         return
+                self._collection_last_attempt["version_bootstrap"] = now
                 self._start_data_collection(source, scheduled=True)
             return
         definitions = (
@@ -5564,7 +5593,7 @@ class MainWindow(QMainWindow):
             waiting_source = source == 'production' and status_value == 'waiting_source'
             minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
             # APS 변경으로 시작된 WIP 감시는 정기 수집 설정과 별개로 완료까지 이어 간다.
-            if minutes <= 0 and not waiting_wip and not waiting_source and not (
+            if minutes <= 0 and source not in errors and not waiting_wip and not waiting_source and not (
                 source == "live" and inventory_bootstrap_due
             ):
                 continue
@@ -5582,7 +5611,7 @@ class MainWindow(QMainWindow):
                 and status_value in {"waiting_wip", "retained"}
             )
             due = (
-                waiting_source or daily_full_due or (source == 'production' and source in errors)
+                waiting_source or daily_full_due or source in errors
                 or retained_retry_due
                 or (source == "live" and inventory_bootstrap_due)
                 or refreshed is None
@@ -5592,7 +5621,7 @@ class MainWindow(QMainWindow):
                 1
                 if source == "aps" or waiting_wip
                 else 5
-                if waiting_source or daily_full_due or (source == 'production' and source in errors) or retained_retry_due or (source == "live" and inventory_bootstrap_due)
+                if waiting_source or daily_full_due or source in errors or retained_retry_due or (source == "live" and inventory_bootstrap_due)
                 else max(5, minutes)
             )
             retry_ready = attempted is None or (now - attempted) >= timedelta(minutes=retry_minutes)
@@ -5737,7 +5766,7 @@ class MainWindow(QMainWindow):
             if retry_blocked(self._read_collection_errors(), source, datetime.now()):
                 return
             bootstrap = self._read_refresh_status(DATA_CENTER_DIR / "backward-v1/settings/version_collection_bootstrap.json")
-            initial = source == "all" and bootstrap.get("completed_version") != APP_VERSION
+            initial = source == "all" and (getattr(self, '_startup_collection_pending', False) or bootstrap.get("completed_version") != APP_VERSION)
             delay = stable_offset(self._distribution_pc_id, "initial", 180) if initial else periodic_delay(self._distribution_pc_id, source, datetime.now())
             self._distributed_pending.add(source)
             def receive():
@@ -5839,6 +5868,8 @@ class MainWindow(QMainWindow):
     def _data_collection_started(self, source: str) -> None:
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         self._collection_started_at = datetime.now()
+        if source == 'all':
+            self._startup_collection_pending = False
         for key in (('bom','aps','production','live') if source == 'all' else (source,)):
             self._collection_last_attempt[key] = self._collection_started_at
         self._set_collection_busy(True, source)

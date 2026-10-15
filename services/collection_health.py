@@ -2,6 +2,25 @@
 from datetime import datetime
 
 
+def freshness_note(source: str, status: dict, now: datetime, *,
+                   startup_pending: bool = False, inventory_cycle: dict | None = None) -> str:
+    """A successful old snapshot is usable, but not proof of current freshness."""
+    state = status.get('status')
+    if state == 'waiting_source':
+        return '서버 자료 대기 · 기존 유지'
+    if state in {'waiting_wip', 'retained'}:
+        return '갱신 대기 · 기존 자료 유지'
+    if source == 'hydration' and inventory_cycle:
+        hydration = inventory_cycle.get('hydration') or {}
+        if hydration.get('status') in {'error', 'pending', 'running'}:
+            return '수화 갱신 미완료 · 기존 유지'
+    if startup_pending:
+        return '시작 동기화 대기 · 기존 자료'
+    if source == 'production' and now.hour >= 7 and status.get('daily_full_date') != now.date().isoformat():
+        return '오늘 전체 미완료 · 기존 자료'
+    return ''
+
+
 def recovered(error: dict, status: dict) -> bool:
     if status.get("status") not in {"success", "skipped"}:
         return False
