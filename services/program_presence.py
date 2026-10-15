@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor
+import os
+import sys
 
 from services.program_gate import ProgramGate
 
@@ -16,13 +18,14 @@ class ProgramPresence:
     """
 
     def __init__(self, version: str) -> None:
+        self._preview = os.getenv('DDOKDDAK_PROD3_PREVIEW') == '1' and not getattr(sys, 'frozen', False)
         self._gate = ProgramGate(version, timeout=2)
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="presence")
         self._future: Future | None = None
         self._closed = False
 
     def heartbeat(self) -> None:
-        if self._closed or (self._future is not None and not self._future.done()):
+        if self._preview or self._closed or (self._future is not None and not self._future.done()):
             return
         self._future = self._executor.submit(self._gate.set_connection, True)
 
@@ -30,6 +33,9 @@ class ProgramPresence:
         if self._closed:
             return
         self._closed = True
+        if self._preview:
+            self._executor.shutdown(wait=False)
+            return
         # Queue the final offline report after any in-flight online report.
         self._future = self._executor.submit(self._gate.set_connection, False)
         self._executor.shutdown(wait=False)

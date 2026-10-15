@@ -7,6 +7,19 @@ from services.program_presence import PRESENCE_INTERVAL_MS, ProgramPresence
 
 
 class PresenceTest(unittest.TestCase):
+    def setUp(self):
+        preview = patch.dict('os.environ', {'DDOKDDAK_PROD3_PREVIEW':'0'})
+        preview.start()
+        self.addCleanup(preview.stop)
+
+    def test_preview_never_changes_real_pc_presence(self):
+        with patch.dict('os.environ', {'DDOKDDAK_PROD3_PREVIEW':'1'}), \
+             patch('services.program_presence.ProgramGate') as gate:
+            monitor = ProgramPresence('3.2.1')
+            monitor.heartbeat()
+            monitor.close()
+            gate.return_value.set_connection.assert_not_called()
+
     def test_payloads(self):
         with patch('services.program_gate.resolve_management_api_url', return_value='https://example.invalid'), patch('services.program_gate.requests.post') as post:
             gate = ProgramGate('2.4')
