@@ -16,6 +16,7 @@ from urllib.parse import parse_qs, urlparse
 
 
 def run() -> dict:
+    from collectors import production_performance_collector as production
     from collectors import inventory_live_refresh as batch
     from collectors import live_production_need_collector as live
     from collectors.process_status_collector import _initialize
@@ -35,7 +36,9 @@ def run() -> dict:
     def response(endpoint, params):
         if endpoint == '/api/aps-wip':
             return {'source_refreshed_at':cycle,'total_count':0,'rows':[]}
-        if endpoint == '/api/production-performance':return {'total_count':0,'rows':[]}
+        if endpoint == '/api/production-performance':
+            if 'production' in failed: raise TimeoutError('simulated performance failure')
+            return {'total_count':0,'rows':[]}
         if endpoint == '/api/inventory-ledger-product':
             wh = params['wh_nm'];calls.append(wh)
             if wh in failed:raise TimeoutError('simulated warehouse timeout')
@@ -45,6 +48,7 @@ def run() -> dict:
             rows = [] if wh in empty else [{'gd_cd':codes[pc],'wh_nm':wh,'stock_qty':qty,'lot_no':''}]
             return {'total_count':len(rows),'rows':rows,'truncated':wh in truncated}
         if endpoint == '/api/hydration-job-list':
+            if 'hydration' in failed: raise TimeoutError('simulated hydration failure')
             return {'total_count':1,'rows':[{'gd_cd':codes['P1000'],'job_qty':2000,'job_no':'TEST1','job_seq':1}]}
         if endpoint == '/api/item-list-bulk':
             base = params['gd_cd']
@@ -90,6 +94,7 @@ def run() -> dict:
             con.executemany('INSERT INTO bom_relation VALUES(?,?,?)',[('P1000','Q1000','Y'),('Q1000','R1000','Y')])
         for module,attributes in [
             (live,{'APS_DB_PATH':aps,'DATA_DIR':data,'DB_PATH':database,'STATUS_PATH':data/'snapshot/refresh_status.json','BACKUP_DIR':data/'backup'}),
+            (production,{'DATA_DIR':root/'production','DB_PATH':root/'production/production_performance.sqlite','STATUS_PATH':root/'production/snapshot/refresh_status.json','BACKUP_DIR':root/'production/backup','RAW_DIR':root/'production/raw_api'}),
             (batch,{'DB_PATH':database,'STATUS_PATH':data/'snapshot/refresh_status.json'}),
             (inventory,{'DATA_CENTER_DIR':root,'DATA_DIR':root/'legacy','LIVE_DB_PATH':database}),
             (live_service,{'DATA_DIR':data,'DB_PATH':database,'STATUS_PATH':data/'snapshot/refresh_status.json'}),
@@ -150,6 +155,19 @@ def run() -> dict:
 
         calls.clear();fifth=batch.refresh()
         assert fifth['status']=='success' and calls==warehouses
+        # A late hydration or production failure must retain every published input,
+        # not just the rendered inventory result.
+        guarded = [database, production.DB_PATH, cache/'hydration_instructions.json',
+                   cache/'latest_result.json', *(cache/('inventory_'+wh+'.json') for wh in warehouses)]
+        before = {path:path.read_bytes() for path in guarded}
+        for fault in ('hydration', 'production'):
+            failed.add(fault)
+            attempt=batch.refresh()
+            assert attempt['status']=='partial', attempt
+            assert all(path.read_bytes()==content for path,content in before.items()), fault
+            failed.clear()
+        recovered=batch.refresh()
+        assert recovered['status']=='success',recovered
         # Render the real inventory page against the collected data.
         from PySide6.QtWidgets import QApplication
         from ui.inventory_master_page import InventoryStatusPage
@@ -169,4 +187,4 @@ def run() -> dict:
         'checks':['2.6.4-shaped data upgrade','first-run timeout recovery','sequential shared warehouse requests',
                   'retry failed warehouse only','preserve source timestamps','zero stock',
                   'truncated response rejected','last valid view retained','exact filter retention',
-                  'Windows SQLite handle release','automatic repeat collection','hydration formula','real inventory table render']}
+                  'Windows SQLite handle release','automatic repeat collection','hydration formula','real inventory table render','late hydration failure retains group','late production failure retains group']}

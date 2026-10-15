@@ -91,7 +91,7 @@ class DmzTransportTests(unittest.TestCase):
     def test_collection_route(self):
         self.assertEqual(dmz.transport_for_collection('live',False),'manual_live')
         self.assertEqual(dmz.transport_for_collection('live',True),'dmz')
-        self.assertEqual(dmz.transport_for_collection('all',False),'dmz')
+        self.assertEqual(dmz.transport_for_collection('all',False),'manual_live')
 
     def test_daily_ledger_range_preserves_opening_movements_and_closing(self):
         yesterday='2026-10-13';today='2026-10-14'
@@ -146,7 +146,7 @@ class DmzTransportTests(unittest.TestCase):
              patch('builtins.print'):
             self.assertEqual(refresh_all.main(force_full=True),2)
             bom.assert_called_once()
-            production.assert_called_once()
+            production.assert_not_called()
             live.assert_called_once()
             report=json.loads((Path(directory)/'report.json').read_text(encoding='utf-8'))
             self.assertEqual(report['results']['aps']['status'],'success')

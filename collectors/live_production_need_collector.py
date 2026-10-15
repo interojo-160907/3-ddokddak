@@ -873,7 +873,14 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
         previous_revision = 0
     # 0.1.21의 이전 계산 DB는 새 회차 첫 수집값을 기준선에도 복사했다.
     # 같은 APS 회차여도 개정 전 결과라면 한 번 재초기화해 최신값을 온전히 반영한다.
-    wip_changed = bool(expected_wip and expected_wip > str(previous_meta.get('wip_source_refreshed_at') or ''))
+    if inventory_progress: inventory_progress('WIP 회차 확인')
+    phase_started = time.perf_counter()
+    wip_probe = probe_wip_source(api_key, min(timeout, 30))
+    phase_seconds["wip_probe"] = round(time.perf_counter() - phase_started, 3)
+    probed_wip_source = str(wip_probe.get("source_refreshed_at") or "")
+    previous_wip = str(previous_meta.get("wip_source_refreshed_at") or "")
+    wip_changed = bool((probed_wip_source and probed_wip_source != previous_wip)
+                       or (expected_wip and expected_wip != previous_wip))
     new_cycle = force_full or aps_changed or wip_changed or previous_revision != CALCULATION_REVISION
     target_items = _aps_item_ids()
     if not target_items:
@@ -888,13 +895,7 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
     wip_rows: list[dict[str, Any]] = []
     wip_source = str(previous_meta.get("wip_source_refreshed_at") or "")
     wip_source_rows = 0
-    if new_cycle:
-        if inventory_progress:inventory_progress('WIP 회차 확인')
-        previous_wip = str(previous_meta.get("wip_source_refreshed_at") or "")
-        phase_started = time.perf_counter()
-        wip_probe = probe_wip_source(api_key, min(timeout, 30))
-        phase_seconds["wip_probe"] = round(time.perf_counter() - phase_started, 3)
-        probed_wip_source = str(wip_probe.get("source_refreshed_at") or "")
+    if new_cycle or not wip_probe.get('ready'):
         wip_not_ready = not bool(wip_probe.get("ready"))
         wip_not_changed = bool(
             aps_changed
@@ -1058,7 +1059,7 @@ def refresh(api_key: str = "", timeout: int = 240, *, inventory_observer=None, i
         "source_identity": source.get("source_identity", ""),
         "source_kind": source.get("source_kind", "aps-plan"),
         "wip_source_refreshed_at": wip_source,
-        "wip_checked_at": captured_at if new_cycle else previous_status.get("wip_checked_at"),
+        "wip_checked_at": captured_at,
         "wip_monitoring": False,
         "baseline_date_from": baseline_from,
         "refreshed_at": datetime.now().astimezone().isoformat(timespec='seconds'),

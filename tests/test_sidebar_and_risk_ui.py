@@ -182,8 +182,8 @@ class SidebarAndRiskUiTest(unittest.TestCase):
 
         self.assertEqual(0, page.horizontalScrollBar().maximum())
         self.assertTrue(window.settings_data_status.wordWrap())
-        self.assertEqual(window.collection_controls['production']['schedule'].currentData(),5)
-        self.assertEqual(window.collection_controls['production']['schedule'].currentText(),'5분')
+        self.assertFalse(window.collection_controls['production']['schedule'].isEnabled())
+        self.assertEqual(window.collection_controls['production']['schedule'].currentText(),'실시간 갱신과 함께')
         self.assertFalse(any(label.text()=='이전 버전 복구' for label in page.findChildren(QLabel)))
         page.deleteLater()
         window.deleteLater()

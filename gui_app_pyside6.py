@@ -186,6 +186,14 @@ def main() -> int:
 
     splash.set_progress(1, 1, "사용 권한 확인 완료")
     app.processEvents()
+    # Restore an interrupted group publication before opening any data views.
+    from services.inventory_status_service import InventoryStatusService
+    from services.collection_staging import recover_publication
+    from services.collection_lock import collection_lock
+    journal = InventoryStatusService().cache / 'pending_publication.json'
+    if journal.exists():
+        with collection_lock():
+            recover_publication(journal)
     window = MainWindow(gate_result.notices)
     if not icon.isNull():
         window.setWindowIcon(icon)

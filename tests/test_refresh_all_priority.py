@@ -14,7 +14,7 @@ class RefreshAllPriorityTests(unittest.TestCase):
             patch.object(refresh_all,'refresh_aps',return_value={'status':'success'}),
             patch.object(refresh_all,'refresh_bom',return_value={'status':'success'}),
             patch.object(refresh_all,'refresh_production',return_value={'status':'waiting_source'}),
-            patch.object(refresh_all,'refresh_live',return_value={'status':'success'}) as live,
+            patch.object(refresh_all,'refresh_live',return_value={'status':'partial','production':{'status':'waiting_source'}}) as live,
             patch.object(refresh_all,'_write_result',side_effect=lambda r:reports.append(copy.deepcopy(r))),
             patch('builtins.print'),
         ):
@@ -32,7 +32,7 @@ class RefreshAllPriorityTests(unittest.TestCase):
         ):
             self.assertEqual(refresh_all.main(force_full=False), 1)
         bom.assert_called_once()
-        production.assert_called_once()
+        production.assert_not_called()
         live.assert_not_called()
 
     def test_base_sources_settle_before_live_inventory_calculation(self) -> None:
@@ -59,7 +59,7 @@ class RefreshAllPriorityTests(unittest.TestCase):
         ):
             self.assertEqual(refresh_all.main(), 0)
 
-        self.assertEqual(order[:3], ["aps", "bom", "production"])
+        self.assertEqual(order, ["aps", "bom", "live"])
         self.assertEqual(order[-1], "live")
 
 

@@ -115,7 +115,7 @@ class ProductionSourceWaitTests(unittest.TestCase):
         status['retry_after']=(now-timedelta(minutes=1)).astimezone().isoformat()
         window._collection_last_attempt={'production':now-timedelta(minutes=6)}
         MainWindow._run_scheduled_collections(window)
-        window._start_data_collection.assert_called_once_with('production',scheduled=True)
+        window._start_data_collection.assert_called_once_with('live',scheduled=True)
 
     def test_header_does_not_claim_success_for_wait(self):
         text,_,ok=header_status({'production_status':{'status':'waiting_source'}},{},{})

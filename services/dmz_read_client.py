@@ -39,7 +39,7 @@ def route_to_dmz(endpoint):
 
 
 def transport_for_collection(source, scheduled):
-    return 'manual_live' if source == 'live' and not scheduled else 'dmz'
+    return 'manual_live' if source in {'all', 'live', 'production', 'hydration'} and not scheduled else 'dmz'
 
 
 def _manual_path(endpoint, params):

@@ -1482,6 +1482,8 @@ class MainWindow(QMainWindow):
         }
 
     def _check_data_snapshot_changes(self) -> None:
+        if getattr(self, "_collection_busy", False):
+            return
         current = self._current_data_db_signatures()
         changed = {
             key for key, signature in current.items()
@@ -5084,7 +5086,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "프로그램을 켤 때마다 한 번 동기화한 뒤 선택 주기로 갱신합니다. 여러 PC의 동시 접속을 줄이기 위해 시작은 0~3분 분산됩니다. APS·WIP는 회차와 준비 상태를 확인합니다."
+            "시작 시 한 번 동기화합니다(0~3분 분산). 자동은 서버 저장 자료, 수동은 원천 API의 실적·재고·수화 지시를 함께 수집합니다. WIP는 변경·준비 상태를 확인하고 변경 시 수집합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5156,9 +5158,13 @@ class MainWindow(QMainWindow):
             schedule.currentIndexChanged.connect(
                 lambda _index, source=key, combo=schedule: self._collection_schedule_changed(source, combo)
             )
-            if key == "hydration":
+            if key in {"production", "hydration"}:
+                schedule.blockSignals(True)
+                schedule.clear()
+                schedule.addItem("실시간 갱신과 함께", 0)
+                schedule.blockSignals(False)
                 schedule.setEnabled(False)
-                schedule.setToolTip("WIP·실시간 실적 반영과 동일한 회차로 고정됩니다.")
+                schedule.setToolTip("실적·재고·수화 지시는 실시간 갱신 주기로 함께 수집합니다.")
             manual = QPushButton("지금 갱신")
             manual.setObjectName("SecondaryButton")
             manual.clicked.connect(lambda _checked=False, source=("live" if key == "hydration" else key): self._start_data_collection(source))
@@ -5591,7 +5597,7 @@ class MainWindow(QMainWindow):
             status_value = str(status.get("status") or "")
             waiting_wip = source == "live" and status_value == "waiting_wip"
             waiting_source = source == 'production' and status_value == 'waiting_source'
-            minutes = int(self.collection_schedule.get(f"{source}_minutes", 0))
+            minutes = int(self.collection_schedule.get("live_minutes" if source == "production" else f"{source}_minutes", 0))
             # APS 변경으로 시작된 WIP 감시는 정기 수집 설정과 별개로 완료까지 이어 간다.
             if minutes <= 0 and source not in errors and not waiting_wip and not waiting_source and not (
                 source == "live" and inventory_bootstrap_due
@@ -5635,6 +5641,7 @@ class MainWindow(QMainWindow):
                     self._aps_distribution_due = None
                 due_sources.append(source)
                 waiting_wip_due = waiting_wip_due or waiting_wip
+        due_sources = list(dict.fromkeys("live" if source == "production" else source for source in due_sources))
         if not due_sources:
             return
         # APS 원천 확인과 WIP 후속 감시가 동시에 도래해도 BOM·생산실적까지
@@ -5759,6 +5766,8 @@ class MainWindow(QMainWindow):
                 button.setEnabled(True)
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False, _spread_applied: bool = False) -> None:
+        if source in {"production", "hydration"}:
+            source = "live"
         if scheduled and not _spread_applied:
             if source in self._distributed_pending:
                 return
@@ -5807,6 +5816,8 @@ class MainWindow(QMainWindow):
                 self.settings_data_status.setText("데이터 정리 중입니다. 완료 후 다시 갱신해 주세요.")
             return
         self._collection_last_attempt[source] = datetime.now()
+        if source == "live":
+            self._collection_last_attempt["production"] = self._collection_last_attempt[source]
         self._collection_active_source = source
         self._collection_started_at = None
         self._collection_live_output = []
@@ -6069,7 +6080,7 @@ class MainWindow(QMainWindow):
         self._refresh_settings_data_status()
         self._collection_forced_error_message = ""
         self._collection_live_output = []
-        changed = {"bom", "aps", "production", "live"} if source == "all" else {source}
+        changed = {"bom", "aps", "production", "live"} if source == "all" else {"production", "live"} if source == "live" else {source}
         self._data_db_signatures = self._current_data_db_signatures()
         self._data_status_signatures = self._current_data_status_signatures()
         self._reload_changed_data_views(changed)
@@ -6085,6 +6096,7 @@ class MainWindow(QMainWindow):
             )
             if source == "live" and full.get("results"):
                 full["results"]["live"] = {"status": inventory.get("status", "missing")}
+                full["results"]["production"] = {"status": inventory.get("production", {}).get("status", "missing")}
             if source != 'all' and full.get('app_version') == APP_VERSION and full.get('results'):
                 folders = {'production':'production-performance', 'bom':'bom',
                            'aps':'backward-v1/process-status', 'live':'backward-v1/live-production-need'}
@@ -6122,7 +6134,7 @@ class MainWindow(QMainWindow):
                 failed = [k for k,v in report.get('sources',{}).items() if v.get('status') != 'success']
                 hydration = report.get('hydration', {})
                 hydration_label = (f"수화 지시 {hydration.get('rows', 0):,}건" if hydration.get('status') == 'success' else '수화 지시 미연결')
-                label = ('갱신 완료' if report.get('status') == 'success' else '부분 갱신') + ' · ' + hydration_label + (' · 창고 오류 ' + ', '.join(failed) if failed else ' · 재고 스냅샷 저장')
+                label = ('갱신 완료' if report.get('status') == 'success' else '묶음 미완료 · 기존 자료 유지') + ' · ' + hydration_label + (' · 창고 오류 ' + ', '.join(failed) if failed else ' · 재고 스냅샷 저장')
                 self.live_need_page.calculation_status.setText(label)
                 self.lot_work_order_page.calculation_status.setText(label)
                 self.settings_data_status.setText(label)

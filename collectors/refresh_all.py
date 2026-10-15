@@ -58,15 +58,11 @@ def main(force_full: bool | None = None) -> int:
     base_collectors = (
         ("aps", lambda: (refresh_aps_full if force_full else refresh_aps)(api_key=api_key, timeout=300)),
         ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=True)),
-        ("production", lambda: refresh_production(api_key=api_key, timeout=240, force_full=force_full)),
     )
     failed = False
-    # Finish APS first. Nested BOM/production workers share two network slots;
-    # scheduling all sources at once starves queued requests before they start.
+    # Settle reference snapshots before the staged business-data group.
     for key, collect in base_collectors:
-        # APS/BOM/production do not depend on the five WIP warehouses.
-        # Each collector validates its own inputs; only the live calculation
-        # waits for a complete matching WIP generation, keeping its old DB.
+        # APS/BOM remain independently refreshable reference data.
         report["current_source"] = key
         _write_result(report)
         try:
@@ -91,6 +87,7 @@ def main(force_full: bool | None = None) -> int:
         if report["results"].get("aps", {}).get("status") not in {"success", "skipped"}:
             raise RuntimeError("Backward APS 수집이 완료되지 않아 실시간 계산을 보류합니다.")
         live_result = refresh_live(force_full=True) if force_full else refresh_live()
+        report["results"]["production"] = {"status": live_result.get("production", {}).get("status", "error"), "result": live_result.get("production", {})}
         report["results"][key] = {"status": live_result.get('status','error'), "result": live_result,
                                    "completed_at": datetime.now().astimezone().isoformat(timespec="seconds")}
     except Exception as exc:
