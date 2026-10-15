@@ -6,8 +6,10 @@ def freshness_note(source: str, status: dict, now: datetime, *,
                    startup_pending: bool = False, inventory_cycle: dict | None = None) -> str:
     """A successful old snapshot is usable, but not proof of current freshness."""
     state = status.get('status')
+    if state == 'check_failed':
+        return '확인 실패 · 기존 자료 유지'
     if state == 'waiting_source':
-        return '서버 자료 대기 · 기존 유지'
+        return '새 APS 서버 수집 대기' if source == 'aps' else '서버 자료 대기 · 기존 유지'
     if state in {'waiting_wip', 'retained'}:
         return '갱신 대기 · 기존 자료 유지'
     if source == 'hydration' and inventory_cycle:
@@ -26,7 +28,7 @@ def recovered(error: dict, status: dict) -> bool:
         return False
     try:
         failed_at = datetime.fromisoformat(str(error["occurred_at"]))
-        succeeded_at = datetime.fromisoformat(str(status.get("refreshed_at") or status.get("collected_at")))
+        succeeded_at = datetime.fromisoformat(str(status.get("checked_at") or status.get("refreshed_at") or status.get("collected_at")))
         # Legacy GUI errors used naive local time; collector statuses include an offset.
         return succeeded_at.astimezone() > failed_at.astimezone()
     except (KeyError, TypeError, ValueError):
@@ -57,7 +59,7 @@ def header_status(statuses: dict, errors: dict, details: dict) -> tuple[str, str
                    for key, value in statuses.items() if isinstance(value, dict)
                    and value.get('status') == 'waiting_source']
         if waiting and not errors:
-            descriptions.insert(0, '서버 미수집 날짜는 0건으로 처리하지 않습니다. 기존 자료를 유지하며 자동 재확인합니다.')
+            descriptions.insert(0, '서버 자료가 준비될 때까지 기존 자료를 유지하며 자동 재확인합니다.')
             return '서버 자료 대기 · ' + ', '.join(waiting), '\n'.join(descriptions), False
         bad = [names.get(key.removesuffix('_status'), key.removesuffix('_status'))
                for key in ('bom_status', 'aps_status', 'production_status', 'live_status')

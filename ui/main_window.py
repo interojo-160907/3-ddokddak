@@ -5441,6 +5441,8 @@ class MainWindow(QMainWindow):
                     f"확인 {str(checked).replace('T', ' ')[:19]}"
                 )
                 if key == "aps":
+                    controls["state"].setToolTip(str(status.get('message') or '') +
+                        f"\n대기 회차 {status.get('pending_run_key') or '-'}")
                     controls["refreshed"].setToolTip(
                         f"APS 원천 갱신 {source_refreshed or '-'}\n"
                         f"로컬 수집 {local_refreshed}\n"

@@ -80,6 +80,14 @@ def main(force_full: bool | None = None) -> int:
         _write_result(report)
 
     # WIP/performance, warehouses and hydration use the latest base snapshots.
+    if report['results'].get('aps', {}).get('status') == 'waiting_source':
+        report['results']['live'] = {'status':'waiting_source',
+            'message':'새 APS 서버 수집 대기 · 기존 계산 유지'}
+        report['current_source'] = ''
+        report['completed_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+        _write_result(report)
+        print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
+        return 1 if failed else 2
     key = "live"
     report["current_source"] = key
     _write_result(report)

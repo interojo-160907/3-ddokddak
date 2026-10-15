@@ -168,6 +168,25 @@ def reset_catalog():
     with _lock: _catalog=None
 
 
+def aps_pending_sources(state):
+    """Check published metadata before downloading large APS snapshots."""
+    sources = catalog()
+    pending = []
+    with connection() as c:
+        for key, endpoint in (('backward', '/api/aps-backward-plan'), ('plan', '/api/aps-plan')):
+            source = next((s for s in sources if s['endpoint'] == endpoint), None)
+            if source is None:
+                pending.append(key)
+                continue
+            row = c.execute("SELECT payload - 'rows' - 'orders' AS metadata FROM collector_hub.raw_payload WHERE job_id=%s AND run_id=%s LIMIT 1",
+                            (source['job_id'], source['run_id'])).fetchone()
+            meta = (row or {}).get('metadata') or {}
+            if (meta.get('truncated') or source['row_count'] != state[key + '_count']
+                    or meta.get('source_refreshed_at') != state[key + '_at']):
+                pending.append(key)
+    return pending
+
+
 def missing_production_days(start, end):
     """Check published coverage before downloading any production snapshots.
 

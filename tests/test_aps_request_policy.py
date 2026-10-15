@@ -26,8 +26,9 @@ class ApsRequestPolicyTests(unittest.TestCase):
             db = Path(d)/'aps.sqlite';db.touch()
             with patch('services.aps_collection_policy.ApsPolicy',return_value=p), \
                  patch.object(collector,'DB_PATH',db), \
-                 patch.object(collector,'_read_status',return_value={'status':'success','run_key':'R1','wip_at':'old'}), \
-                 patch.object(collector,'outbound_state',return_value={'run_key':'R1','wip_at':'new'}), \
+                 patch.object(collector,'STATUS_PATH',Path(d)/'status.json'), \
+                 patch.object(collector,'_read_status',return_value={'status':'success','run_key':'R1','source_identity':'S1','refreshed_at':'2026-10-15T08:00:00+09:00','wip_at':'old'}), \
+                 patch.object(collector,'outbound_state',return_value={'run_key':'R1','source_identity':'S1','wip_at':'new'}), \
                  patch.object(collector,'_sync_wip_metadata',return_value=True), \
                  patch.object(collector,'_request',return_value={}) as request, \
                  patch.object(collector,'_refresh_snapshot') as download:

@@ -213,19 +213,44 @@ def refresh(api_key: str = "", timeout: int = 300) -> dict[str, Any]:
             raise RuntimeError('APS 실패 후 서버 보호 대기 중입니다. 재시도 간격은 10·20·40·60분입니다.')
         if not stored_mode:
             policy.begin()
+        local = _read_status(STATUS_PATH)
         try:
+            if stored_mode:
+                from services.dmz_read_client import reset_catalog
+                reset_catalog()
             before = outbound_state(_request('/api/aps-outbound-status', {'limit':0}, api_key, timeout))
-            local = _read_status(STATUS_PATH)
-            if DB_PATH.exists() and local.get('run_key') == before['run_key'] and local.get('status') == 'success':
+            if (DB_PATH.exists() and local.get('run_key') == before['run_key']
+                    and local.get('source_identity') == before['source_identity']
+                    and local.get('refreshed_at') and local.get('status') != 'retained'):
                 wip_changed = _sync_wip_metadata(local, before)
+                local.update(status='success', checked_at=datetime.now().astimezone().isoformat(timespec='seconds'),
+                             message='APS 원천 변경 없음', pending_run_key='', pending_sources=[])
+                _atomic_json(STATUS_PATH, local)
                 policy.succeeded(before['run_key'])
                 return {**local, 'changed':False, 'wip_metadata_changed':wip_changed}
+            if stored_mode:
+                from services.dmz_read_client import aps_pending_sources
+                pending = aps_pending_sources(before)
+                if pending:
+                    result = {**local, 'status':'waiting_source', 'changed':False,
+                              'checked_at':datetime.now().astimezone().isoformat(timespec='seconds'),
+                              'pending_run_key':before['run_key'], 'pending_sources':pending,
+                              'message':'새 APS 회차 감지 · DMZ Backward/Plan 수집 완료 대기 · 기존 자료 유지'}
+                    _atomic_json(STATUS_PATH, result)
+                    return result
             result = _refresh_snapshot(api_key, timeout, before)
             if result.get('status') != 'success':
                 raise RuntimeError('APS 전체 수집이 완료되지 않아 이전 자료를 유지합니다.')
             policy.succeeded(before['run_key'])
             return {**result, 'changed':True}
         except Exception:
+            # Keep the successful data timestamps and database; surface a failed
+            # monitor even when the background process exits without JSON.
+            current = _read_status(STATUS_PATH)
+            if current.get('status') != 'retained':
+                _atomic_json(STATUS_PATH, {**current, 'status':'check_failed',
+                    'checked_at':datetime.now().astimezone().isoformat(timespec='seconds'),
+                    'message':'APS 확인 실패 · 기존 자료 유지 · 다음 주기에 재확인'})
             if not stored_mode:
                 policy.failed()
             raise
@@ -321,7 +346,7 @@ def _refresh_snapshot(api_key, timeout, before):
         "supplement_errors": supplement_errors,
         "source_rows": len(source_rows), "stored_rows": len(rows), "order_count": order_count,
         "source_refreshed_at": str(payload.get("source_refreshed_at") or ""),
-        "refreshed_at": now.isoformat(timespec="seconds"), "raw_snapshot": str(raw_path),
+        "refreshed_at": now.isoformat(timespec="seconds"), "checked_at": now.isoformat(timespec="seconds"), "raw_snapshot": str(raw_path),
         "remark_count": len(order_remarks), "remark_error": remark_error,
     }
     _atomic_json(STATUS_PATH, result)
