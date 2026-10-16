@@ -1,8 +1,0 @@
-3.2.3 requires complete production observation bundles from the server.
-Do not promote this build or change the Google Sheet version until:
-1. SQL-only delivery groups have been verified across an APS change (collector executable is unchanged).
-2. At least two complete real cycles and an APS change have been verified.
-3. Production3 results and source quantities have been compared on a pilot PC.
-This marker prevents the release workflow from promoting the candidate to latest.
-SQL-only mirror and isolated PC reception of the 2026-10-16 11:00 cycle are verified.
-The user is reviewing a separate 3.2.3 source preview before promotion.
