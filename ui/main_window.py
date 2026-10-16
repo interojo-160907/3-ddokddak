@@ -1551,6 +1551,9 @@ class MainWindow(QMainWindow):
         self._refresh_header_status()
 
     def _start_aps_monitor_check(self) -> None:
+        self._start_data_collection('all', scheduled=True)
+        return
+
         if os.getenv("DDOKDDAK_PROD3_PREVIEW") == "1" and os.getenv('DDOKDDAK_PROD3_DMZ_REVIEW') != '1':
             return
         if (
@@ -2243,6 +2246,17 @@ class MainWindow(QMainWindow):
                                   datetime.now(), startup_pending=getattr(self, '_startup_collection_pending', False))
             if note:
                 status_text, status_tip, api_collection_ready = note, '설정 및 운영에서 자료 반영 시각과 마지막 확인 시각을 확인하세요.', False
+        delivery = MainWindow._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings/delivery_status.json')
+        if delivery:
+            status_text = {'success':'양호', 'receiving':'수집계산중', 'waiting_source':'수집 확인중'}.get(delivery.get('status'), '수집 확인중')
+            api_collection_ready = delivery.get('status') == 'success'
+            try:
+                received = datetime.fromisoformat(delivery['received_at']).astimezone()
+                if (datetime.now().astimezone()-received).total_seconds() > 3900:
+                    status_text, api_collection_ready = '서버 갱신 대기 · 이전 자료 사용', False
+                status_tip = '자료 수신 ' + received.strftime('%m-%d %H:%M:%S') + '\n' + status_text
+            except (KeyError, ValueError):
+                status_tip = status_text
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText("●  " + status_text)
         self.data_status.setToolTip(status_tip)
@@ -2267,8 +2281,13 @@ class MainWindow(QMainWindow):
         self.data_status.style().unpolish(self.data_status)
         self.data_status.style().polish(self.data_status)
         if getattr(self,'_collection_busy',False):
-            self.data_status.setText('● 수집 중 · 기존 데이터 사용')
-            self.data_status.setProperty('state','waiting')
+            if getattr(self, '_collection_active_transport', 'dmz') == 'dmz':
+                label, ready = self._delivery_activity()
+                self.data_status.setText('● ' + label)
+                self.data_status.setProperty('state', 'ready' if ready else 'waiting')
+            else:
+                self.data_status.setText('● 원 API 갱신 중 · 기존 데이터 사용')
+                self.data_status.setProperty('state','waiting')
         elif hasattr(self, 'inventory_page') and self._current_page in {'inventory','live_need','lot_work_order'}:
             state = self.inventory_page.inventory_service.cache / 'refresh_status.json'
             if state.exists():
@@ -5086,7 +5105,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "시작 시 한 번 동기화합니다(0~3분 분산). 자동·수동 모두 서버가 함께 준비한 실적·재고·수화 지시를 받습니다. WIP는 변경·준비 상태를 확인하고 변경 시 수집합니다."
+            "자동: 서버의 새 완성본만 받습니다. ① APS 갱신 후 ② 생산 현황이 준비되면 함께 반영합니다. 이후에는 ②만 갱신합니다. 수동: 원 API를 직접 조회합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5102,11 +5121,8 @@ class MainWindow(QMainWindow):
 
         self.collection_controls: dict[str, dict[str, QWidget]] = {}
         definitions = (
-            ("bom", "BOM", "제품명·BOM 전체 스냅샷", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
-            ("aps", "S관 APS", "Backward 기준 · 수동 갱신은 재조회", (("중지", 0), ("1분 (기본)", 1), ("5분", 5), ("10분", 10), ("30분", 30), ("1시간", 60))),
-            ("production", "생산실적", "07시 첫 전체 · 이후 최근 7일", (("수동만", 0), ("30분", 30), ("1시간", 60), ("3시간", 180), ("6시간", 360), ("12시간", 720), ("24시간", 1440))),
-            ("live", "WIP·실시간 실적 반영", "5개 WIP·생산실적·4개 표시 창고를 같은 회차로 계산", (("수동만", 0), ("30분", 30), ("1시간 (기본)", 60), ("2시간", 120), ("3시간", 180))),
-            ("hydration", "수화 지시", "4개 표시 창고·실시간 실적과 동시에 수집 후 부족량 계산", (("실시간 갱신과 함께", 0),)),
+            ("aps", "① APS 자료", "계획·백워드·WIP · 같은 APS 회차", (("중지",0),("새 자료 1분 확인",1),("새 자료 5분 확인",5))),
+            ("live", "② 생산 현황", "BOM·실적·재고·수화 지시 · 완성본 함께 반영", (("서버 1시간 · APS 변경 시",60),)),
         )
         for row_index, (key, name, subtext, choices) in enumerate(definitions, start=1):
             name_box = QVBoxLayout()
@@ -5158,6 +5174,9 @@ class MainWindow(QMainWindow):
             schedule.currentIndexChanged.connect(
                 lambda _index, source=key, combo=schedule: self._collection_schedule_changed(source, combo)
             )
+            if key == "live":
+                schedule.setEnabled(False)
+                schedule.setToolTip("서버가 매시간과 APS 변경 후 준비합니다. PC는 APS 행의 확인 주기로 새 완성본을 확인합니다.")
             if key in {"production", "hydration"}:
                 schedule.blockSignals(True)
                 schedule.clear()
@@ -5165,9 +5184,9 @@ class MainWindow(QMainWindow):
                 schedule.blockSignals(False)
                 schedule.setEnabled(False)
                 schedule.setToolTip("실적·재고·수화 지시는 실시간 갱신 주기로 함께 수집합니다.")
-            manual = QPushButton("지금 갱신")
+            manual = QPushButton("원 API 갱신")
             manual.setObjectName("SecondaryButton")
-            manual.clicked.connect(lambda _checked=False, source=("live" if key == "hydration" else key): self._start_data_collection(source))
+            manual.clicked.connect(lambda _checked=False, source="all": self._start_data_collection(source))
             grid.addWidget(connection, row_index, 1)
             grid.addLayout(state_box, row_index, 2)
             grid.addWidget(refreshed, row_index, 3)
@@ -5478,6 +5497,7 @@ class MainWindow(QMainWindow):
                     controls["connection"].setStyleSheet("color:#059669;font-weight:800;" if connected else "color:#d97706;font-weight:800;")
                     controls["state"].setToolTip(str((inventory_cycle.get("hydration") or {}).get("error") or "") + "\n수화 지시는 4개 표시 창고 재고와 동시에 수집되고, 모든 입력 완료 후 부족량을 계산합니다.")
         self.settings_data_status.setText("  |  ".join(parts))
+        self._refresh_delivery_group_labels()
 
     def _collection_schedule_changed(self, source: str, combo: QComboBox) -> None:
         self.collection_schedule[f"{source}_minutes"] = int(combo.currentData() or 0)
@@ -5486,6 +5506,24 @@ class MainWindow(QMainWindow):
         self.collection_schedule_note.setText(
             f"{combo.currentText()} 설정을 저장했습니다. 자동 수집은 프로그램 실행 중에만 동작합니다."
         )
+        self._refresh_delivery_group_labels()
+
+    def _refresh_delivery_group_labels(self):
+        report=self._read_refresh_status(DATA_CENTER_DIR/'backward-v1/settings/delivery_status.json')
+        if not report:return
+        def local_clock(value):
+            if not value:return '-'
+            try:return datetime.fromisoformat(str(value)).astimezone().strftime('%m-%d %H:%M:%S')
+            except ValueError:return str(value)
+        for key in ('aps','live'):
+            controls=self.collection_controls.get(key)
+            if not controls:continue
+            controls['state'].setText({'success':'양호', 'receiving':'수집계산중', 'waiting_source':'수집 확인중'}.get(report.get('status'), '수집 확인중'))
+            controls['state'].setStyleSheet('color: #059669;' if report.get('status')=='success' else 'color: #d97706;')
+            stamp=local_clock(report.get('received_at')) if key=='live' else report.get('aps_key','-')
+            controls['refreshed'].setText(f"자료 {stamp}\nPC 반영 {local_clock(report.get('applied_at'))}")
+            controls['refreshed'].setToolTip('서버 확인 '+local_clock(report.get('checked_at')))
+        self.settings_data_status.setText('① APS 자료 + ② 생산 현황 · '+{'success':'양호', 'receiving':'수집계산중', 'waiting_source':'수집 확인중'}.get(report.get('status'), '수집 확인중'))
 
     def _apply_collection_timers(self, *, run_initial: bool = False) -> None:
         self.aps_monitor_timer.stop()
@@ -5777,6 +5815,9 @@ class MainWindow(QMainWindow):
                 button.setEnabled(True)
 
     def _start_data_collection(self, source: str, *, scheduled: bool = False, _spread_applied: bool = False) -> None:
+        if scheduled:
+            source = 'all'
+
         if source in {"production", "hydration"}:
             source = "live"
         if scheduled and not _spread_applied:
@@ -5815,7 +5856,9 @@ class MainWindow(QMainWindow):
             "production": "production_performance_collector.py",
             "live": "inventory_live_refresh.py",
         }
-        labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
+        if scheduled:
+            scripts = {key:"delivery_refresh.py" for key in scripts}
+        labels = {"all": "두 그룹", "bom": "BOM", "aps": "APS 자료", "production": "생산실적", "live": "생산 현황"}
         if source not in scripts:
             return
         if hasattr(self, "aps_monitor_process") and self.aps_monitor_process.state() != QProcess.NotRunning:
@@ -5943,6 +5986,18 @@ class MainWindow(QMainWindow):
         if len(joined) > 30_000:
             self._collection_live_output = [joined[-30_000:]]
 
+    def _delivery_activity(self):
+        report = self._read_refresh_status(DATA_CENTER_DIR / 'backward-v1/settings/delivery_status.json')
+        started = getattr(self, '_collection_started_at', None)
+        try:
+            checked = datetime.fromisoformat(report.get('checked_at', '')).astimezone().replace(tzinfo=None)
+            current = started is not None and checked >= started - timedelta(seconds=2)
+        except ValueError:
+            current = False
+        if not current:return '수집 확인중', False
+        if report.get('status') == 'receiving':return '수집계산중', False
+        return ('양호', True) if report.get('status') == 'success' else ('수집 확인중', False)
+
     def _update_collection_elapsed(self) -> None:
         process = getattr(self, "settings_collection_process", None)
         started = getattr(self, "_collection_started_at", None)
@@ -5952,6 +6007,12 @@ class MainWindow(QMainWindow):
         minutes, seconds = divmod(elapsed_seconds, 60)
         labels = {"all": "전체", "bom": "BOM", "aps": "S관 APS", "production": "생산실적", "live": "실시간 실적 반영"}
         source = getattr(self, "_collection_active_source", "all")
+        if getattr(self, '_collection_active_transport', 'dmz') == 'dmz':
+            self._refresh_delivery_group_labels()
+            label, ready = self._delivery_activity()
+            self.settings_data_status.setText(label if ready else f'{label} · 경과 {minutes:02d}:{seconds:02d}')
+            self._refresh_header_status()
+            return
         transport_label = '원본 실적 갱신' if getattr(self,'_collection_active_transport','dmz') == 'manual_live' else '사내 서버 자료 받기'
         suffix = (" · 원본 API 응답 대기" if transport_label == '원본 실적 갱신'
                   else " · 서버 자료를 읽는 중") if elapsed_seconds >= 30 else ""

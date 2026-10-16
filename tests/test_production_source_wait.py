@@ -25,7 +25,9 @@ class ProductionSourceWaitTests(unittest.TestCase):
                                         Mock(fetchall=Mock(return_value=[])),
                                         Mock(fetchall=Mock(return_value=[old, latest]))]
         with patch.object(dmz,'_catalog',None), patch.object(dmz,'connection') as connect, \
-             patch.object(dmz,'datetime') as clock:
+             patch.object(dmz,'datetime') as clock, \
+             patch('services.delivery_groups.read_pair',return_value=({'version':'a'}, {'version':'b','received_at':datetime.now(timezone.utc),'started_at':datetime.now(timezone.utc)})), \
+             patch('services.delivery_groups.pin_sources',side_effect=lambda items,a,b:items):
             connect.return_value.__enter__.return_value=connection
             clock.now.return_value=datetime(2026,10,31,tzinfo=timezone(timedelta(hours=9)))
             self.assertEqual([r['snapshot_id'] for r in dmz.catalog()],['latest','old'])

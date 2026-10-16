@@ -824,10 +824,10 @@ class LotWorkOrderPage(ProcessOverviewPage):
     def set_refreshing(self, refreshing: bool) -> None:
         self._refreshing = refreshing
         self.lot_refresh_button.setEnabled(not refreshing)
-        self.lot_refresh_button.setText("수집 중…" if refreshing else "지금 갱신")
+        self.lot_refresh_button.setText("지금 갱신")
         if not refreshing:self.refresh_calculation_status()
         if refreshing:
-            self.calculation_status.setText("WIP·재고·완료실적·수화 지시 수집 중")
+            self.calculation_status.setText("수집중")
             self.calculation_status.setProperty("status", "warning")
             self.calculation_status.setToolTip(
                 "실시간 실적 반영과 같은 원천 데이터를 수집한 뒤 LOT 작업 순서 기준을 다시 계산합니다."
@@ -864,9 +864,11 @@ class LotWorkOrderPage(ProcessOverviewPage):
         calculated = _display_time(status.get("refreshed_at"))
         wip_time = _display_time(status.get("wip_source_refreshed_at"))
         state = str(status.get("status") or "")
+        self.lot_refresh_button.setText("지금 갱신")
+        self.lot_refresh_button.setToolTip("누르면 원 API에서 최신 자료를 수집해 다시 계산합니다.")
         target = self.calculation_status
         if state == "success" and calculated != "-":
-            target.setText(f"계산 완료  {_date_clock_time(calculated)}")
+            target.setText(f"계산완료  {_date_clock_time(calculated)}")
             target.setProperty("status", "success")
             target.setToolTip(
                 f"LOT 작업 순서의 부족수량·재공 배정 기준\n"

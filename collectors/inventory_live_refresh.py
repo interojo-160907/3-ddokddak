@@ -269,6 +269,11 @@ def refresh(*, force_full: bool = False) -> dict:
     live_collector._atomic_json(folder / 'refresh_status.json', report)
     if not journal.exists():
         prune_group_stages(published.cache / 'snapshots')
+    if report.get('status') == 'success' and os.getenv('DDOKDDAK_PROD3_TRANSPORT') == 'manual_live':
+        from services.data_location import resolve_data_root
+        barrier = resolve_data_root()/'backward-v1/settings/manual_refresh_barrier.json'
+        barrier.parent.mkdir(parents=True, exist_ok=True)
+        live_collector._atomic_json(barrier, {'completed_at':datetime.now().astimezone().isoformat()})
     return report
 
 

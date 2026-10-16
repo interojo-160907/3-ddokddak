@@ -29,6 +29,7 @@ a = Analysis(
         "collectors.live_production_need_collector",
         "collectors.inventory_live_refresh",
         "collectors.refresh_all",
+        "collectors.delivery_refresh",
     ],
     hookspath=[],
     hooksconfig={},

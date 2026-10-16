@@ -100,10 +100,10 @@ class LiveProductionNeedPage(ProcessOverviewPage):
     def set_refreshing(self, refreshing: bool) -> None:
         self._refreshing = refreshing
         self.live_refresh_button.setEnabled(not refreshing)
-        self.live_refresh_button.setText("수집 중…" if refreshing else "지금 갱신")
+        self.live_refresh_button.setText("지금 갱신")
         if not refreshing:self._show_cycle_status()
         if refreshing:
-            self.calculation_status.setText("새 APS 기준 WIP·재고·실적·수화 지시 수집 중")
+            self.calculation_status.setText("수집중")
             self.calculation_status.setProperty("status", "warning")
             self.calculation_status.setToolTip(
                 "최신 APS 회차와 연결되는 WIP를 확인한 뒤 재고·완료실적을 수집해 계산합니다."
@@ -125,6 +125,8 @@ class LiveProductionNeedPage(ProcessOverviewPage):
         aps_time = _display_time(status.get("aps_source_refreshed_at"))
         calculated = _display_time(status.get("refreshed_at"))
         state = str(status.get("status") or "")
+        self.live_refresh_button.setText("지금 갱신")
+        self.live_refresh_button.setToolTip("누르면 원 API에서 최신 자료를 수집해 다시 계산합니다.")
         target = self.calculation_status
         if state in {"retained", "waiting_wip"}:
             attempted_aps = _display_time(
@@ -144,7 +146,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
                 f"감지한 새 APS {attempted_aps}"
             )
         elif state == "success":
-            target.setText(f"계산 완료  {_date_clock_time(calculated)}")
+            target.setText(f"계산완료  {_date_clock_time(calculated)}")
             target.setProperty("status", "success")
             target.setToolTip(
                 f"APS 기준 {aps_time}\n"

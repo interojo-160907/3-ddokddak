@@ -29,10 +29,10 @@ class DmzTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'미준비'):
                 request_json('/api/hydration-job-list')
 
-    def test_manual_live_keeps_wip_and_references_on_server(self):
+    def test_manual_live_reads_original_api_for_all_sources(self):
         with patch.dict(os.environ,{'DDOKDDAK_PROD3_TRANSPORT':'manual_live'}):
-            self.assertTrue(dmz.route_to_dmz('/api/aps-wip'))
-            self.assertTrue(dmz.route_to_dmz('/api/item-list-bulk'))
+            self.assertFalse(dmz.route_to_dmz('/api/aps-wip'))
+            self.assertFalse(dmz.route_to_dmz('/api/item-list-bulk'))
             for endpoint in ('/api/production-performance','/api/inventory-ledger-product','/api/hydration-job-list'):
                 self.assertFalse(dmz.route_to_dmz(endpoint))
 
@@ -89,9 +89,9 @@ class DmzTransportTests(unittest.TestCase):
                 dmz.request_json('/api/production-performance',{'date_from':'2026-10-12','date_to':'2026-10-14'})
 
     def test_collection_route(self):
-        self.assertEqual(dmz.transport_for_collection('live',False),'dmz')
+        self.assertEqual(dmz.transport_for_collection('live',False),'manual_live')
         self.assertEqual(dmz.transport_for_collection('live',True),'dmz')
-        self.assertEqual(dmz.transport_for_collection('all',False),'dmz')
+        self.assertEqual(dmz.transport_for_collection('all',False),'manual_live')
 
     def test_daily_ledger_range_preserves_opening_movements_and_closing(self):
         yesterday='2026-10-13';today='2026-10-14'

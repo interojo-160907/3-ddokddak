@@ -29,6 +29,7 @@ from ui.table_clipboard import install_table_clipboard
 
 
 COLLECTOR_MODULES = {
+    "delivery_refresh": "collectors.delivery_refresh",
     "inventory_live_refresh": "collectors.inventory_live_refresh",
     "aps_update_monitor": "collectors.aps_update_monitor",
     "bom_snapshot_collector": "collectors.bom_snapshot_collector",
@@ -194,6 +195,11 @@ def main() -> int:
     if journal.exists():
         with collection_lock():
             recover_publication(journal)
+    from services.data_location import resolve_data_root
+    delivery_journal = resolve_data_root() / 'backward-v1/settings/delivery_publication.json'
+    if delivery_journal.exists():
+        with collection_lock():
+            recover_publication(delivery_journal)
     window = MainWindow(gate_result.notices)
     if not icon.isNull():
         window.setWindowIcon(icon)

@@ -37,24 +37,17 @@ REFERENCE_ENDPOINTS = {'/api/aps-plan','/api/aps-backward-plan','/api/aps-arrang
 def route_to_dmz(endpoint):
     mode = os.getenv('DDOKDDAK_PROD3_TRANSPORT','').strip()
     path = urlsplit(endpoint).path
-    return mode == 'dmz' or (mode == 'manual_live' and path in REFERENCE_ENDPOINTS)
+    return mode == 'dmz'
 
 
 def transport_for_collection(source, scheduled):
-    # Manual refresh means receiving the server's completed cohort, too.
-    return 'dmz'
+    return 'dmz' if scheduled else 'manual_live'
 
 
 def begin_production_cycle():
-    global _catalog, _production_cycle, _cycle_payloads
-    from services.production_cycle import read_cycle, pin_catalog
-    reset_catalog()
-    bundle = read_cycle(connection)
-    pinned, payloads = pin_catalog(catalog(), bundle)
-    with _lock:
-        _catalog, _cycle_payloads = pinned, payloads
-        _production_cycle = {k:bundle[k] for k in ('cycle_id','business_date',
-            'started_at','received_at','observation_span_seconds')}
+    catalog()
+    if _production_cycle is None:
+        raise ValueError('서버 두 그룹 준비 중')
     return dict(_production_cycle)
 
 
@@ -125,9 +118,11 @@ def connection():
 
 
 def catalog():
-    global _catalog
+    global _catalog, _production_cycle
     with _lock:
         if _catalog is None:
+            from services.delivery_groups import read_pair, pin_sources
+            aps_group, live_group = read_pair(connection, version=os.getenv('DDOKDDAK_DELIVERY_VERSION'))
             with connection() as c:
                 _catalog = c.execute('''SELECT j.id AS job_id,j.dataset,j.endpoint,j.request_params,
                     j.last_success_at,s.id AS snapshot_id,s.run_id,s.row_count,s.source_version,s.content_hash,
@@ -176,6 +171,11 @@ def catalog():
                 ids={r['snapshot_id'] for r in _catalog}
                 _catalog.extend(r for r in production_history if r['snapshot_id'] not in ids)
                 _catalog.sort(key=lambda r:r['published_at'],reverse=True)
+            _catalog = pin_sources(_catalog, aps_group, live_group)
+            _production_cycle = dict(cycle_id=live_group['version'],aps_version=aps_group['version'],
+                business_date=live_group['received_at'].astimezone(timezone(timedelta(hours=9))).date().isoformat(),
+                started_at=live_group['started_at'].isoformat(),received_at=live_group['received_at'].isoformat(),
+                observation_span_seconds=(live_group['received_at']-live_group['started_at']).total_seconds())
         return _catalog
 
 
@@ -197,7 +197,7 @@ def aps_pending_sources(state):
             if source is None:
                 pending.append(key)
                 continue
-            row = c.execute("SELECT payload - 'rows' - 'orders' AS metadata FROM collector_hub.raw_payload WHERE job_id=%s AND run_id=%s LIMIT 1",
+            row = {'metadata':source['metadata']} if source.get('delivery') else c.execute("SELECT payload - 'rows' - 'orders' AS metadata FROM collector_hub.raw_payload WHERE job_id=%s AND run_id=%s LIMIT 1",
                             (source['job_id'], source['run_id'])).fetchone()
             meta = (row or {}).get('metadata') or {}
             if (meta.get('truncated') or source['row_count'] != state[key + '_count']
@@ -265,8 +265,8 @@ def _valid_rows(rows,source):
 def snapshot(source):
     sid = source['snapshot_id']
     with _lock:
-        if source.get('production_cycle'):
-            return _cycle_payloads[sid]
+        if source.get('delivery'):
+            return delivery_snapshot(source)
         if sid in _rows:
             _rows.move_to_end(sid)
             return _rows[sid]
@@ -410,3 +410,26 @@ def request_json(endpoint,params=None,**kwargs):
                 collection_origin='DMZ',downloaded_at=datetime.now().astimezone().isoformat())
     # Never replace one member of a pinned cohort with a different manual query.
     return meta if _production_cycle is not None else prefer_newer_manual(endpoint,params,meta)
+
+
+def delivery_snapshot(source):
+    from services.delivery_groups import mapped_rows
+    sid=source['snapshot_id']
+    path=resolve_data_root()/'backward-v1/dmz-cache'/(sid+'.delivery.json.gz')
+    rows=None
+    if path.exists():
+        try:
+            with gzip.open(path,'rt',encoding='utf-8') as f:rows=json.load(f)
+            if not _valid_rows(rows,source):rows=None
+        except (OSError,ValueError):rows=None
+    if rows is None:
+        with connection() as c:
+            record=c.execute('SELECT rows FROM prod3_delivery.payload WHERE snapshot_id=%s',(sid,)).fetchone()
+        if not record:raise ValueError('서버 완성본 자료 확인 필요')
+        rows=mapped_rows(record['rows'],source.get('field_mappings',[]))
+        if not _valid_rows(rows,source):raise ValueError('서버 완성본 건수·검증값 불일치')
+        path.parent.mkdir(parents=True,exist_ok=True)
+        temp=path.with_suffix('.tmp')
+        with gzip.open(temp,'wt',encoding='utf-8') as f:json.dump(rows,f,ensure_ascii=False,default=str)
+        temp.replace(path)
+    return {'rows':rows,'metadata':dict(source['metadata'])}

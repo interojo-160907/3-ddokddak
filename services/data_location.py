@@ -34,6 +34,9 @@ def write_registry_value(name: str, value: str) -> None:
 
 
 def resolve_data_root() -> Path:
+    stage = os.getenv("DDOKDDAK_PROD3_STAGE_ROOT", "").strip()
+    if stage:
+        return Path(stage).resolve()
     preview = os.getenv('DDOKDDAK_PROD3_PREVIEW_DATA_DIR', '').strip()
     if preview and os.getenv('DDOKDDAK_PROD3_PREVIEW') == '1' and not getattr(sys, 'frozen', False):
         return Path(preview).expanduser()
