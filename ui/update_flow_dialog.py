@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
@@ -33,17 +34,18 @@ class UpdateDownloadWorker(QObject):
     completed = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, update_url: str, destination: Path) -> None:
+    def __init__(self, update_url: str, latest_version: str, save_only: bool) -> None:
         super().__init__()
         self.update_url = update_url
-        self.destination = destination
+        self.latest_version = latest_version
+        self.save_only = save_only
 
     @Slot()
     def run(self) -> None:
         try:
             path = download_installer(
                 self.update_url,
-                self.destination,
+                installer_destination(self.update_url, self.latest_version, save_only=self.save_only),
                 self.progress.emit,
             )
         except Exception as exc:
@@ -61,6 +63,7 @@ class RequiredUpdateDialog(QDialog):
         self.download_progress_handler = None
         self.download_completed_handler = None
         self.download_failed_handler = None
+        self.pending_result = None
 
     @Slot(int)
     def handle_download_progress(self, value: int) -> None:
@@ -69,13 +72,19 @@ class RequiredUpdateDialog(QDialog):
 
     @Slot(str)
     def handle_download_completed(self, path_text: str) -> None:
-        if self.download_completed_handler is not None:
-            self.download_completed_handler(path_text)
+        self.pending_result = (True, path_text)
 
     @Slot(str)
     def handle_download_failed(self, error: str) -> None:
-        if self.download_failed_handler is not None:
-            self.download_failed_handler(error)
+        self.pending_result = (False, error)
+
+    @Slot()
+    def finish_download(self) -> None:
+        if self.pending_result:
+            ok, value = self.pending_result
+            self.pending_result = None
+            handler = self.download_completed_handler if ok else self.download_failed_handler
+            handler(value)
 
     def reject(self) -> None:
         return
@@ -87,6 +96,7 @@ def show_required_update(
     latest_version: str,
     message: str,
     update_url: str,
+    *, download_only: bool = False,
 ) -> str:
     dialog = RequiredUpdateDialog(parent)
     dialog.setObjectName("requiredUpdateDialog")
@@ -210,10 +220,28 @@ def show_required_update(
     buttons.addWidget(update_button, 1)
     root.addLayout(buttons)
     active_action = {"value": ""}
+    saved_path = {"value": None}
+    folder_button = QPushButton("저장 폴더 열기")
+    folder_button.setObjectName("openDownloadFolder")
+    folder_button.hide()
+    root.addWidget(folder_button)
+    close_button = QPushButton("닫기" if download_only else "다운로드 확인 · 프로그램 종료")
+    close_button.setObjectName("downloadConfirm")
+    close_button.setVisible(download_only)
+    close_button.clicked.connect(dialog.accept)
+    root.addWidget(close_button)
+    if download_only:
+        update_button.hide()
+        subtitle.setText("최신 설치파일을 다운로드합니다. 완료 후 저장 폴더에서 실행할 수 있습니다.")
+    def open_folder():
+        if saved_path["value"] and not QDesktopServices.openUrl(QUrl.fromLocalFile(str(saved_path["value"].parent))):
+            set_status(f"폴더를 열지 못했습니다. 저장 위치: {saved_path['value']}", error=True)
+    folder_button.clicked.connect(open_folder)
 
     def set_busy(busy: bool) -> None:
         download_button.setEnabled(not busy)
         update_button.setEnabled(not busy)
+        close_button.setEnabled(not busy)
 
     def set_status(text: str, *, error: bool = False) -> None:
         status.setProperty("state", "error" if error else "")
@@ -240,6 +268,8 @@ def show_required_update(
 
     def download_completed(path_text: str) -> None:
         path = Path(path_text)
+        saved_path["value"] = path
+        folder_button.show()
         progress.setRange(0, 100)
         progress.setValue(100)
         if active_action["value"] == "update":
@@ -253,7 +283,10 @@ def show_required_update(
             set_status("다운로드 완료 · 프로그램 종료 후 업데이트를 적용합니다.")
         else:
             dialog.selected_action = "download"
-            set_status(f"다운로드 완료 · {path}\n프로그램을 종료합니다.")
+            set_status(f"다운로드 완료 · {path}\n설치하려면 저장 폴더에서 설치파일을 실행해 주세요.")
+            close_button.show()
+            close_button.setEnabled(True)
+            return
         QTimer.singleShot(60, dialog.accept)
 
     dialog.download_progress_handler = update_progress
@@ -266,18 +299,13 @@ def show_required_update(
             set_status("관리 시트에 올바른 설치파일 주소가 등록되지 않았습니다.", error=True)
             return
         active_action["value"] = action
-        destination = installer_destination(
-            target_url,
-            latest_version,
-            save_only=action == "download",
-        )
         set_busy(True)
         progress.setRange(0, 100)
         progress.setValue(0)
         progress.show()
         set_status("설치파일 다운로드를 시작합니다.")
         thread = QThread(dialog)
-        worker = UpdateDownloadWorker(target_url, destination)
+        worker = UpdateDownloadWorker(target_url, latest_version, action == "download")
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.progress.connect(dialog.handle_download_progress)
@@ -286,6 +314,7 @@ def show_required_update(
         worker.completed.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(dialog.finish_download)
         dialog.download_thread = thread
         dialog.download_worker = worker
         thread.start()

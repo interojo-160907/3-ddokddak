@@ -79,7 +79,7 @@ class ApiHealthTests(unittest.TestCase):
         app=QApplication.instance() or QApplication([])
         details=self.details();details['aps']['status']='delayed'
         w=SimpleNamespace(dashboard_data=self.statuses(),_current_page='settings',
-            LIVE_PROCESS_NAV={},LOT_PROCESS_NAV={},header_meta=QLabel(),data_status=QPushButton(),
+            LIVE_PROCESS_NAV={},LOT_PROCESS_NAV={},header_meta=QLabel(),aps_basis_note=QLabel(),data_status=QPushButton(),
             _mode_error='',_api_health_details=details,_read_collection_errors=lambda:{})
         with patch('ui.main_window.safe_mode.active',return_value={}):
             MainWindow._refresh_header_status(w)
@@ -89,5 +89,14 @@ class ApiHealthTests(unittest.TestCase):
             MainWindow._refresh_header_status(w)
             self.assertIn('수집 상태 확인 필요',w.data_status.text())
             self.assertIn('#FFF7ED',w.data_status.styleSheet())
+            with patch('services.aps_display.ApsDisplayService.status',return_value={'source_refreshed_at':'2026-10-16 15:07:20'}):
+                w.live_need_page=SimpleNamespace(service=SimpleNamespace(status=lambda:{'aps_source_refreshed_at':'2026-10-16 07:38:52'}))
+                for page in ('dashboard','process_overview','live_need','lot_work_order','inventory','settings'):
+                    w._current_page=page
+                    MainWindow._refresh_header_status(w)
+                    self.assertEqual(w.header_meta.text(),'APS 갱신  2026-10-16 15:07:20')
+                w._current_page='live_need'
+                MainWindow._refresh_header_status(w)
+                self.assertIn('이전 회차',w.aps_basis_note.text())
 
 if __name__=='__main__': unittest.main()

@@ -76,3 +76,11 @@ def delivery_note(kind='live'):
         received=datetime.fromisoformat(str(report.get('received_at',''))).astimezone().strftime('%m-%d %H:%M:%S')
     except ValueError:received='확인 중'
     return f'계산 기준 APS {applied} · 생산 현황 {received}\n{purpose}'
+
+
+def aps_basis_note(latest: str, applied: str | None) -> str:
+    if not applied:
+        return "계산 기준 APS: 미확인 · 같은 회차의 APS·생산 현황이 준비된 후 계산됩니다."
+    if str(latest) > str(applied):
+        return f"이 화면 APS 기준 {applied} · 이전 회차 표시 / 새 회차 준비 중 · 같은 회차의 APS·생산 현황이 준비되면 반영됩니다."
+    return f"이 화면 APS 기준 {applied} · 재고·실적 계산에는 같은 회차의 생산 현황을 사용합니다."

@@ -1860,6 +1860,12 @@ class MainWindow(QMainWindow):
         header_actions_layout.addWidget(self.lot_header_row)
         header.addWidget(self.header_actions, 0, Qt.AlignRight | Qt.AlignTop)
         content_layout.addWidget(self.global_header)
+        self.aps_basis_note = QLabel()
+        self.aps_basis_note.setObjectName("ApsBasisNote")
+        self.aps_basis_note.setWordWrap(True)
+        self.aps_basis_note.setStyleSheet("QLabel { color:#35618F; background:#EFF6FF; border-radius:6px; padding:6px 10px; }")
+        self.aps_basis_note.hide()
+        content_layout.addWidget(self.aps_basis_note)
 
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack, 1)
@@ -2221,15 +2227,19 @@ class MainWindow(QMainWindow):
                 'classes':list(detail._selected_classifications()), 'process':process}
 
     def _refresh_header_status(self) -> None:
-        aps_fresh = self.dashboard_data.get("aps_status", {}).get("source_refreshed_at") or "-"
-        if self._current_page in ('process_overview','injection','separation','hydration','inspection','leak'):
-            from services.aps_display import ApsDisplayService
-            aps_fresh=ApsDisplayService().status().get('source_refreshed_at') or aps_fresh
-        if (
-            self._current_page == "live_need" or self._current_page in self.LIVE_PROCESS_NAV
-            or self._current_page == "lot_work_order" or self._current_page in self.LOT_PROCESS_NAV
-        ) and hasattr(self, "live_need_page"):
-            aps_fresh = self.live_need_page.service.status().get("aps_source_refreshed_at") or aps_fresh
+        from services.aps_display import ApsDisplayService, aps_basis_note
+        # The global badge always refers to the latest locally available APS.
+        # Page-specific calculation sources are shown separately, never substituted.
+        latest_aps = ApsDisplayService().status()
+        aps_fresh = latest_aps.get("source_refreshed_at") or self.dashboard_data.get("aps_status", {}).get("source_refreshed_at") or "-"
+        basis = self.dashboard_data.get("aps_status", {}).get("source_refreshed_at")
+        if (self._current_page in ("live_need", "lot_work_order", "inventory") or
+                self._current_page in self.LIVE_PROCESS_NAV or self._current_page in self.LOT_PROCESS_NAV) and hasattr(self, "live_need_page"):
+            basis = self.live_need_page.service.status().get("aps_source_refreshed_at")
+        aps_page = self._current_page in ('process_overview','injection','separation','hydration','inspection','leak')
+        note = "" if aps_page or safe_mode.active() else aps_basis_note(aps_fresh, basis)
+        self.aps_basis_note.setText(note)
+        self.aps_basis_note.setVisible(bool(note))
         self.header_meta.setText(f"APS 갱신  {aps_fresh}")
         info = safe_mode.active()
         if info:
@@ -4975,7 +4985,7 @@ class MainWindow(QMainWindow):
             show_app_message(self, "설치 링크 복사", "최신 설치파일 주소를 복사했습니다.", kind="success")
 
         def download_latest_installer() -> None:
-            QDesktopServices.openUrl(QUrl(DEFAULT_UPDATE_URL))
+            show_required_update(self, APP_VERSION, "최신 배포본", "GitHub의 최신 설치파일을 다운로드합니다.", DEFAULT_UPDATE_URL, download_only=True)
 
         cards = (
             (

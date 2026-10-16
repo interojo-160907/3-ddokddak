@@ -84,6 +84,16 @@ jobs:
           $installer = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
           .github/scripts/test-installer-reinstall.ps1 -Installer $installer
 
+      - name: Verify actual automatic update helper
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $installer = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
+          python .github/scripts/test-update-helper.py $installer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify direct upgrades from all published versions
         shell: pwsh
         env:
