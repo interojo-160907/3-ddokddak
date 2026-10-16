@@ -858,6 +858,7 @@ class LotWorkOrderPage(ProcessOverviewPage):
         self.refresh_calculation_status()
 
     def refresh_calculation_status(self) -> None:
+        self.refresh_delivery_notice()
         if getattr(self,'_refreshing',False):return
         """LOT 배정이 사용하는 최신 부족수량/WIP 산출 기준을 표시한다."""
         status = self.source_status_service.status()

@@ -24,11 +24,10 @@ def _probe(path: str, params: dict[str, object], timeout: float) -> dict:
     result = {"endpoint": path, "checked_at": datetime.now().astimezone().isoformat()}
     try:
         if os.getenv('DDOKDDAK_PROD3_TRANSPORT') == 'dmz':
-            from services.dmz_read_client import catalog
-            rows = [r for r in catalog() if r['endpoint'] == path]
-            if not rows:
-                raise RuntimeError('사내 서버 저장 자료 미준비')
-            result.update(status='success', source='DMZ stored snapshots')
+            from services.dmz_read_client import connection
+            with connection() as c:
+                c.execute('SELECT 1').fetchone()
+            result.update(status='success', source='DMZ connection')
             result['elapsed_seconds'] = round(time.monotonic() - started, 3)
             return result
         with request_turn(path), requests.get(f"{BASE_URL}{path}", params=params, headers=_headers(),

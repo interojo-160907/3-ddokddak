@@ -1464,16 +1464,19 @@ class MainWindow(QMainWindow):
             return None
 
     def _current_data_db_signatures(self) -> dict[str, tuple[int, int] | None]:
+        from services.aps_display import ApsDisplayService
         return {
             "inventory": self._database_signature(INVENTORY_STATUS_DATA_DIR / 'refresh_status.json'),
             "bom": self._database_signature(DATA_CENTER_DIR / "bom" / "product_reference.sqlite"),
-            "aps": self._database_signature(DATA_CENTER_DIR / "backward-v1/process-status" / "aps_process_status.sqlite"),
+            "aps": self._database_signature(ApsDisplayService().database_path),
             "production": self._database_signature(DATA_CENTER_DIR / "production-performance" / "production_performance.sqlite"),
             "live": self._database_signature(Path(os.getenv('DDOKDDAK_PROD3_LIVE_NEED_DATA_DIR',str(DATA_CENTER_DIR / 'backward-v1/live-production-need'))) / "current_production_need.sqlite"),
         }
 
     def _current_data_status_signatures(self) -> dict[str, tuple[int, int] | None]:
         return {
+            "delivery": self._database_signature(DATA_CENTER_DIR/'backward-v1/settings/delivery_status.json'),
+            "aps_view": self._database_signature(DATA_CENTER_DIR/'backward-v1/aps-view/current.json'),
             "bom": self._database_signature(DATA_CENTER_DIR / "bom" / "snapshot" / "refresh_status.json"),
             "aps": self._database_signature(DATA_CENTER_DIR / "backward-v1/process-status" / "snapshot" / "refresh_status.json"),
             "production": self._database_signature(DATA_CENTER_DIR / "production-performance" / "snapshot" / "refresh_status.json"),
@@ -1483,6 +1486,17 @@ class MainWindow(QMainWindow):
 
     def _check_data_snapshot_changes(self) -> None:
         if getattr(self, "_collection_busy", False):
+            # The APS view is immutable and independently published even while
+            # the paired calculation is still running in its private stage.
+            from services.aps_display import ApsDisplayService
+            signature=self._database_signature(ApsDisplayService().database_path)
+            if signature!=self._data_db_signatures.get('aps') and hasattr(self,'process_overview_page'):
+                self._data_db_signatures['aps']=signature
+                self.process_overview_page.reload_data()
+                for page in getattr(self,'fixed_process_pages',{}).values():
+                    page.load_normalized_rows(self.process_overview_page.all_rows)
+                self._refresh_settings_data_status()
+                self._refresh_header_status()
             return
         current = self._current_data_db_signatures()
         changed = {
@@ -2208,6 +2222,9 @@ class MainWindow(QMainWindow):
 
     def _refresh_header_status(self) -> None:
         aps_fresh = self.dashboard_data.get("aps_status", {}).get("source_refreshed_at") or "-"
+        if self._current_page in ('process_overview','injection','separation','hydration','inspection','leak'):
+            from services.aps_display import ApsDisplayService
+            aps_fresh=ApsDisplayService().status().get('source_refreshed_at') or aps_fresh
         if (
             self._current_page == "live_need" or self._current_page in self.LIVE_PROCESS_NAV
             or self._current_page == "lot_work_order" or self._current_page in self.LOT_PROCESS_NAV
@@ -2257,6 +2274,11 @@ class MainWindow(QMainWindow):
                 status_tip = '자료 수신 ' + received.strftime('%m-%d %H:%M:%S') + '\n' + status_text
             except (KeyError, ValueError):
                 status_tip = status_text
+            from services.aps_display import delivery_note,read_manifest
+            if read_manifest().get('aps_key') and read_manifest().get('aps_key')!=delivery.get('aps_key'):
+                status_text='새 APS 조회 가능 · 생산 현황 대기'
+                api_collection_ready=False
+            status_tip=delivery_note('live') or status_tip
         self.data_status.setProperty("state", "ready" if api_collection_ready else "waiting")
         self.data_status.setText("●  " + status_text)
         self.data_status.setToolTip(status_tip)
@@ -5105,7 +5127,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "자동: 서버의 새 완성본만 받습니다. ① APS 갱신 후 ② 생산 현황이 준비되면 함께 반영합니다. 이후에는 ②만 갱신합니다. 수동: 원 API를 직접 조회합니다."
+            "자동: ① APS 자료는 준비되는 즉시 공정 현황에서 조회합니다. 계산은 같은 APS 회차의 ② 생산 현황이 준비된 뒤 반영하며, 대기 중에는 이전 정상 계산을 표시합니다. 수동: 원 API를 직접 조회합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5518,12 +5540,19 @@ class MainWindow(QMainWindow):
         for key in ('aps','live'):
             controls=self.collection_controls.get(key)
             if not controls:continue
-            controls['state'].setText({'success':'양호', 'receiving':'수집계산중', 'waiting_source':'수집 확인중'}.get(report.get('status'), '수집 확인중'))
-            controls['state'].setStyleSheet('color: #059669;' if report.get('status')=='success' else 'color: #d97706;')
-            stamp=local_clock(report.get('received_at')) if key=='live' else report.get('aps_key','-')
-            controls['refreshed'].setText(f"자료 {stamp}\nPC 반영 {local_clock(report.get('applied_at'))}")
+            view=report.get('aps_view',{})
+            ready=bool(view) and not report.get('aps_view_error') if key=='aps' else report.get('status')=='success'
+            state='조회 가능' if key=='aps' and ready else {'success':'계산 반영 완료','receiving':'계산 반영 중','waiting_source':'생산 현황 대기'}.get(report.get('status'),'확인 중')
+            if key=='aps' and report.get('aps_view_error'):state='APS 수신 확인 필요'
+            controls['state'].setText(state)
+            controls['state'].setStyleSheet('color: #059669;' if ready else 'color: #d97706;')
+            stamp=local_clock(report.get('received_at')) if key=='live' else view.get('aps_key',report.get('aps_key','-'))
+            applied=view.get('applied_at',report.get('applied_at')) if key=='aps' else report.get('applied_at')
+            controls['refreshed'].setText(f"자료 {stamp}\nPC 반영 {local_clock(applied)}")
             controls['refreshed'].setToolTip('서버 확인 '+local_clock(report.get('checked_at')))
-        self.settings_data_status.setText('① APS 자료 + ② 생산 현황 · '+{'success':'양호', 'receiving':'수집계산중', 'waiting_source':'수집 확인중'}.get(report.get('status'), '수집 확인중'))
+        self.settings_data_status.setText('① APS 먼저 조회 · ② 같은 회차 생산 현황으로 계산 · '+{'success':'계산 반영 완료', 'receiving':'계산 반영 중', 'waiting_source':'생산 현황 대기'}.get(report.get('status'), '확인 중'))
+        for page in [getattr(self,'process_overview_page',None),getattr(self,'live_need_page',None),getattr(self,'lot_work_order_page',None),getattr(self,'inventory_page',None),*getattr(self,'fixed_process_pages',{}).values(),*getattr(self,'live_fixed_process_pages',{}).values(),*getattr(self,'lot_fixed_process_pages',{}).values()]:
+            if page and hasattr(page,'refresh_delivery_notice'):page.refresh_delivery_notice()
 
     def _apply_collection_timers(self, *, run_initial: bool = False) -> None:
         self.aps_monitor_timer.stop()

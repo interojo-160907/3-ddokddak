@@ -120,6 +120,7 @@ class LiveProductionNeedPage(ProcessOverviewPage):
             self._show_cycle_status()
 
     def _show_cycle_status(self) -> None:
+        self.refresh_delivery_notice()
         if getattr(self,'_refreshing',False):return
         status = self.service.status()
         aps_time = _display_time(status.get("aps_source_refreshed_at"))

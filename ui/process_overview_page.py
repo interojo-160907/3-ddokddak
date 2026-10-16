@@ -1137,11 +1137,19 @@ class ProcessOverviewPage(QWidget):
         super().__init__(parent)
         self.fixed_process = fixed_process
         self.service = ProcessStatusService()
+        if type(self).__name__ == 'ProcessOverviewPage':
+            from services.aps_display import ApsDisplayService
+            self.service = ApsDisplayService()
         self.all_rows: list[dict] = []
         self._db_signature: tuple[int, int] | None = None
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(14)
+        self.delivery_notice = QLabel()
+        self.delivery_notice.setWordWrap(True)
+        self.delivery_notice.setStyleSheet('color:#235986; background:#EFF6FF; padding:8px; border-radius:6px;')
+        root.addWidget(self.delivery_notice)
+        self.refresh_delivery_notice()
         filters = Card()
         top = QHBoxLayout(filters)
         self.filter_bar_layout = top
@@ -1244,11 +1252,13 @@ class ProcessOverviewPage(QWidget):
         return result
 
     def reload_data(self) -> None:
+        self.refresh_delivery_notice()
         self.status.setText("데이터 갱신 중…"); self.status.setProperty("status", "warning"); _repolish(self.status)
         self.all_rows = self._normalize(self.service.load_rows()); self._db_signature = self._signature(); self._apply_market_view()
 
     def load_normalized_rows(self, rows: list[dict]) -> None:
         """이미 읽은 APS 공정 스냅샷을 전용 탭끼리 공유한다."""
+        self.refresh_delivery_notice()
         self.all_rows = list(rows)
         self._db_signature = self._signature()
         self._apply_market_view()
@@ -1277,7 +1287,14 @@ class ProcessOverviewPage(QWidget):
             self._apply_market_view()
 
     def _refresh_if_changed(self) -> None:
+        self.refresh_delivery_notice()
         if self._signature() != self._db_signature: self.reload_data()
+
+    def refresh_delivery_notice(self):
+        from services.aps_display import delivery_note
+        text = delivery_note('aps' if type(self).__name__ == 'ProcessOverviewPage' else 'live')
+        self.delivery_notice.setText(text)
+        self.delivery_notice.setVisible(bool(text))
 
     def _market_changed(self, selected: QPushButton) -> None:
         market = str(selected.property("market") or ""); all_button = self.market_buttons[0]; categories = self.market_buttons[1:]

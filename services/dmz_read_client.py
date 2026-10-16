@@ -121,6 +121,20 @@ def catalog():
     global _catalog, _production_cycle
     with _lock:
         if _catalog is None:
+            view_version = os.getenv('DDOKDDAK_APS_VIEW_VERSION')
+            if view_version:
+                # This mode is exclusively for the isolated APS display collector.
+                # No group 2 or historical aliases enter this catalog.
+                with connection() as c:
+                    view = c.execute('SELECT * FROM prod3_delivery.release WHERE group_no=1 AND version=%s', (view_version,)).fetchone()
+                if not view:
+                    raise ValueError('APS 조회 회차 보관 종료 · 다음 확인 때 재수신')
+                _catalog = [dict(member) for member in view['members']]
+                for member in _catalog:
+                    for key in ('published_at', 'last_success_at'):
+                        if isinstance(member.get(key), str):
+                            member[key] = datetime.fromisoformat(member[key])
+                return _catalog
             from services.delivery_groups import read_pair, pin_sources
             aps_group, live_group = read_pair(connection, version=os.getenv('DDOKDDAK_DELIVERY_VERSION'))
             with connection() as c:
@@ -409,7 +423,7 @@ def request_json(endpoint,params=None,**kwargs):
                 date_to=end or meta.get('date_to'),dmz_snapshot_ids=[s['snapshot_id'] for s in selected],
                 collection_origin='DMZ',downloaded_at=datetime.now().astimezone().isoformat())
     # Never replace one member of a pinned cohort with a different manual query.
-    return meta if _production_cycle is not None else prefer_newer_manual(endpoint,params,meta)
+    return meta if _production_cycle is not None or os.getenv('DDOKDDAK_APS_VIEW_VERSION') else prefer_newer_manual(endpoint,params,meta)
 
 
 def delivery_snapshot(source):

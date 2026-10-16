@@ -63,7 +63,19 @@ def main():
         tmp=status_path.with_suffix('.tmp');tmp.write_text(json.dumps(report,ensure_ascii=False,default=str,indent=2),encoding='utf-8');tmp.replace(status_path)
     try:
         report['server']=head_status(connection)
+        report['connection_status']='success'
+        latest_aps=next((h for h in report['server']['groups'] if h['group_no']==1),None)
+        if latest_aps:
+            from collectors.aps_display_refresh import receive_aps_view
+            try:
+                report['aps_view']=receive_aps_view(root,latest_aps)
+                report.pop('aps_view_error',None)
+            except Exception as exc:
+                report['aps_view_error']=str(exc)
+            save()
         aps,data=read_pair(connection)
+        if latest_aps and latest_aps['version']!=aps['version']:
+            raise ValueError('새 APS 조회 가능 · 같은 회차 생산 현황 준비 중 · 이전 계산 유지')
         report['available_version']=data['version']
         if previous.get('applied_version')==data['version']:
             pending=any(h['group_no']==1 and h['version']!=aps['version'] for h in report['server']['groups'])
@@ -76,6 +88,7 @@ def main():
         copy_inputs(root,stage)
         env=os.environ.copy();env['DDOKDDAK_PROD3_STAGE_ROOT']=str(stage)
         env['DDOKDDAK_PROD3_TRANSPORT']='dmz';env['DDOKDDAK_DELIVERY_VERSION']=data['version']
+        env.pop('DDOKDDAK_APS_VIEW_VERSION',None)
         command=[sys.executable]+([] if getattr(sys,'frozen',False) else [str(ROOT/'gui_app_pyside6.py')])+['--collector','refresh_all']
         if '--full' in sys.argv[1:]:command.append('--full')
         result=subprocess.run(command,env=env,capture_output=True,timeout=1200,
