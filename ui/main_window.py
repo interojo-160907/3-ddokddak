@@ -2288,7 +2288,7 @@ class MainWindow(QMainWindow):
             else:
                 self.data_status.setText('● 원 API 갱신 중 · 기존 데이터 사용')
                 self.data_status.setProperty('state','waiting')
-        elif hasattr(self, 'inventory_page') and self._current_page in {'inventory','live_need','lot_work_order'}:
+        elif not delivery and hasattr(self, 'inventory_page') and self._current_page in {'inventory','live_need','lot_work_order'}:
             state = self.inventory_page.inventory_service.cache / 'refresh_status.json'
             if state.exists():
                 try:
