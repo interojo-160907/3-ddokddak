@@ -5086,7 +5086,7 @@ class MainWindow(QMainWindow):
         detail_layout.setContentsMargins(0, 8, 0, 0)
         detail_layout.setSpacing(10)
         notice = QLabel(
-            "시작 시 한 번 동기화합니다(0~3분 분산). 자동은 서버 저장 자료, 수동은 원천 API의 실적·재고·수화 지시를 함께 수집합니다. WIP는 변경·준비 상태를 확인하고 변경 시 수집합니다."
+            "시작 시 한 번 동기화합니다(0~3분 분산). 자동·수동 모두 서버가 함께 준비한 실적·재고·수화 지시를 받습니다. WIP는 변경·준비 상태를 확인하고 변경 시 수집합니다."
         )
         notice.setObjectName("CollectionNotice")
         notice.setWordWrap(True)
@@ -5440,6 +5440,15 @@ class MainWindow(QMainWindow):
                     f"{time_label} {str(refreshed).replace('T', ' ')[:19]}\n"
                     f"확인 {str(checked).replace('T', ' ')[:19]}"
                 )
+                cohort = status.get('server_cycle') or inventory_cycle.get('server_cycle')
+                if key in {'production', 'live', 'hydration'} and cohort:
+                    from services.production_cycle import observation_label
+                    controls["refreshed"].setText(observation_label(cohort) +
+                        f"\nPC 반영 {str(local_refreshed).replace('T', ' ')[:19]}")
+                    controls["refreshed"].setToolTip(
+                        f"서버 수집 회차 {cohort.get('cycle_id', '-')}\n"
+                        "재고·실적·수화 지시를 같은 수집 회차로 반영합니다.\n"
+                        "원천 ERP의 완전히 동일한 순간을 보장하는 것은 아닙니다.")
                 if key == "aps":
                     controls["state"].setToolTip(str(status.get('message') or '') +
                         f"\n대기 회차 {status.get('pending_run_key') or '-'}")

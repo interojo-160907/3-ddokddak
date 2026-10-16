@@ -10,9 +10,9 @@ from services.dmz_read_client import transport_for_collection
 
 
 class GroupTests(unittest.TestCase):
-    def test_manual_group_uses_original_and_automatic_uses_server(self):
+    def test_manual_and_automatic_use_the_same_server_cohort(self):
         for source in ('all', 'production', 'live', 'hydration'):
-            self.assertEqual(transport_for_collection(source, False), 'manual_live')
+            self.assertEqual(transport_for_collection(source, False), 'dmz')
             self.assertEqual(transport_for_collection(source, True), 'dmz')
 
     def test_unchanged_wip_is_checked_without_full_download(self):

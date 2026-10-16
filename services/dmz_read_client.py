@@ -21,6 +21,8 @@ from services.data_location import resolve_data_root
 
 _lock = threading.RLock()
 _catalog = None
+_production_cycle = None
+_cycle_payloads = {}
 _rows = OrderedDict()
 WAREHOUSES = {'사출창고':'Q001','분리창고':'R001','검사접착':'G007',
               '누수규격검사':'G005','규격검사완료':'P002'}
@@ -39,7 +41,21 @@ def route_to_dmz(endpoint):
 
 
 def transport_for_collection(source, scheduled):
-    return 'manual_live' if source in {'all', 'live', 'production', 'hydration'} and not scheduled else 'dmz'
+    # Manual refresh means receiving the server's completed cohort, too.
+    return 'dmz'
+
+
+def begin_production_cycle():
+    global _catalog, _production_cycle, _cycle_payloads
+    from services.production_cycle import read_cycle, pin_catalog
+    reset_catalog()
+    bundle = read_cycle(connection)
+    pinned, payloads = pin_catalog(catalog(), bundle)
+    with _lock:
+        _catalog, _cycle_payloads = pinned, payloads
+        _production_cycle = {k:bundle[k] for k in ('cycle_id','business_date',
+            'started_at','received_at','observation_span_seconds')}
+    return dict(_production_cycle)
 
 
 def _manual_path(endpoint, params):
@@ -164,8 +180,11 @@ def catalog():
 
 
 def reset_catalog():
-    global _catalog
-    with _lock: _catalog=None
+    global _catalog, _production_cycle, _cycle_payloads
+    with _lock:
+        _catalog=None
+        _production_cycle=None
+        _cycle_payloads={}
 
 
 def aps_pending_sources(state):
@@ -246,6 +265,8 @@ def _valid_rows(rows,source):
 def snapshot(source):
     sid = source['snapshot_id']
     with _lock:
+        if source.get('production_cycle'):
+            return _cycle_payloads[sid]
         if sid in _rows:
             _rows.move_to_end(sid)
             return _rows[sid]
@@ -387,4 +408,5 @@ def request_json(endpoint,params=None,**kwargs):
                 truncated=len(page)<total,date_from=start or meta.get('date_from'),
                 date_to=end or meta.get('date_to'),dmz_snapshot_ids=[s['snapshot_id'] for s in selected],
                 collection_origin='DMZ',downloaded_at=datetime.now().astimezone().isoformat())
-    return prefer_newer_manual(endpoint,params,meta)
+    # Never replace one member of a pinned cohort with a different manual query.
+    return meta if _production_cycle is not None else prefer_newer_manual(endpoint,params,meta)

@@ -69,6 +69,7 @@ def _refresh(*, force_full: bool = False, service=None, progress_path=None) -> d
             save_report()
 
     def reuse_warehouse(warehouse, query):
+        if os.getenv('DDOKDDAK_PROD3_TRANSPORT') == 'dmz':return None
         if force_full:return None
         # During recovery reuse only recent, validated responses for the exact
         # same ledger period. Normal manual/automatic refreshes fetch everything.
@@ -165,8 +166,26 @@ def refresh(*, force_full: bool = False) -> dict:
     from services.collection_staging import (collector_paths, copy_existing,
                                                publish_group, recover_publication, prune_group_stages)
     published = InventoryStatusService()
-    journal = published.cache / 'pending_publication.json'
+    journal = published.cache / "pending_publication.json"
     recover_publication(journal)
+    server_cycle = None
+    if os.getenv('DDOKDDAK_PROD3_TRANSPORT') == 'dmz':
+        from services.dmz_read_client import begin_production_cycle
+        try:
+            server_cycle = begin_production_cycle()
+        except Exception as exc:
+            report = live_collector._read_json(published.cache / 'refresh_status.json')
+            checked = datetime.now().astimezone().isoformat(timespec='seconds')
+            report.update(status='waiting_source',phase='서버 자료 묶음 준비 중',
+                          checked_at=checked,
+                          message=str(exc),result={'status':'retained','message':'이전 정상 자료 표시 중'})
+            for path, key in ((STATUS_PATH,'live'),(production.STATUS_PATH,'production')):
+                state = live_collector._read_json(path)
+                state.update(status='waiting_source',checked_at=checked,message=str(exc))
+                live_collector._atomic_json(path,state)
+                report[key] = state
+            live_collector._atomic_json(published.cache / 'refresh_status.json',report)
+            return report
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     folder = published.cache / 'snapshots' / stamp
     stage_cache = folder / 'inventory'
@@ -208,13 +227,19 @@ def refresh(*, force_full: bool = False) -> dict:
     report['staging_cache'] = str(stage_cache)
     report['snapshot'] = str(folder)
     report['transport'] = os.getenv('DDOKDDAK_PROD3_TRANSPORT', 'dmz')
+    if server_cycle:
+        report['server_cycle'] = server_cycle
     if report['status'] == 'success':
         state = live_collector._read_json(staged_status)
         state.update(database=str(live_db), complete_cycle=report['cycle_id'])
+        if server_cycle:
+            state['server_cycle'] = server_cycle
         live_collector._atomic_json(staged_status, state)
         prod_state_path = stage_production / 'snapshot/refresh_status.json'
         state = live_collector._read_json(prod_state_path)
         state.update(database=str(production_db), complete_cycle=report['cycle_id'])
+        if server_cycle:
+            state['server_cycle'] = server_cycle
         live_collector._atomic_json(prod_state_path, state)
         pairs = [(staged_db, live_db), (staged_status, live_status),
                  (stage_production / production_db.name, production_db),

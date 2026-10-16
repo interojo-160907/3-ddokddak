@@ -89,9 +89,9 @@ class DmzTransportTests(unittest.TestCase):
                 dmz.request_json('/api/production-performance',{'date_from':'2026-10-12','date_to':'2026-10-14'})
 
     def test_collection_route(self):
-        self.assertEqual(dmz.transport_for_collection('live',False),'manual_live')
+        self.assertEqual(dmz.transport_for_collection('live',False),'dmz')
         self.assertEqual(dmz.transport_for_collection('live',True),'dmz')
-        self.assertEqual(dmz.transport_for_collection('all',False),'manual_live')
+        self.assertEqual(dmz.transport_for_collection('all',False),'dmz')
 
     def test_daily_ledger_range_preserves_opening_movements_and_closing(self):
         yesterday='2026-10-13';today='2026-10-14'

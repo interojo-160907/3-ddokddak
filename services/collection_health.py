@@ -6,6 +6,8 @@ def freshness_note(source: str, status: dict, now: datetime, *,
                    startup_pending: bool = False, inventory_cycle: dict | None = None) -> str:
     """A successful old snapshot is usable, but not proof of current freshness."""
     state = status.get('status')
+    if source in {'production','live','hydration'} and inventory_cycle and inventory_cycle.get('status') == 'waiting_source':
+        return '서버 자료 묶음 준비 중 · 이전 자료 표시'
     if state == 'check_failed':
         return '확인 실패 · 기존 자료 유지'
     if state == 'waiting_source':
