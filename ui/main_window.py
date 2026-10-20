@@ -1334,7 +1334,7 @@ class MainWindow(QMainWindow):
         self.collection_scheduler_timer.timeout.connect(self._run_scheduled_collections)
         self.collection_scheduler_timer.start()
         self.data_cleanup_timer = QTimer(self)
-        self.data_cleanup_timer.setInterval(6 * 60 * 60 * 1_000)
+        self.data_cleanup_timer.setInterval(30 * 60 * 1_000)
         self.data_cleanup_timer.timeout.connect(lambda: self._start_data_cleanup(scheduled=True))
         self.data_cleanup_timer.start()
         self.permission_check_timer = QTimer(self)
@@ -1492,6 +1492,10 @@ class MainWindow(QMainWindow):
             signature=self._database_signature(ApsDisplayService().database_path)
             if signature!=self._data_db_signatures.get('aps') and hasattr(self,'process_overview_page'):
                 self._data_db_signatures['aps']=signature
+                self.dashboard_data = self.dashboard_service.load()
+                self._close_order_detail()
+                self._refresh_risk_alerts()
+                self._refresh_dashboard_channel_metrics()
                 self.process_overview_page.reload_data()
                 for page in getattr(self,'fixed_process_pages',{}).values():
                     page.load_normalized_rows(self.process_overview_page.all_rows)
@@ -1513,6 +1517,8 @@ class MainWindow(QMainWindow):
             self._reload_changed_data_views(changed)
         else:
             self.dashboard_data = self.dashboard_service.load()
+            self._close_order_detail()
+            self._refresh_risk_alerts()
             if hasattr(self, "live_need_page"):
                 self.live_need_page._show_cycle_status()
             if hasattr(self, "lot_work_order_page"):
@@ -2238,6 +2244,10 @@ class MainWindow(QMainWindow):
             basis = self.live_need_page.service.status().get("aps_source_refreshed_at")
         aps_page = self._current_page in ('process_overview','injection','separation','hydration','inspection','leak')
         note = "" if aps_page or safe_mode.active() else aps_basis_note(aps_fresh, basis)
+        if self._current_page == 'dashboard' and not safe_mode.active():
+            note = (f"알림 기준 APS {basis or '미확인'} · " +
+                    ("같은 APS 회차의 재고·실적 반영" if self.dashboard_data.get('live_available')
+                     else "APS 필요수량 기준 · 같은 회차 실적 준비 전"))
         self.aps_basis_note.setText(note)
         self.aps_basis_note.setVisible(bool(note))
         self.header_meta.setText(f"APS 갱신  {aps_fresh}")
@@ -3037,7 +3047,7 @@ class MainWindow(QMainWindow):
                 f" · {'작업완료' if order.get('work_completed') else '진행 중'}"
             )
         else:
-            summary_text += " · 안전모드 조회" if safe_mode.active() else " · 실시간 계산 대기"
+            summary_text += " · 안전모드 조회" if safe_mode.active() else " · APS 기준 · 같은 회차 실적 준비 전"
         if safe_mode.active():
             summary_text = summary_text.replace(f"수주수량 {float(order.get('order_qty') or 0):,.0f} pcs", "수주수량 원본 미제공")
         self.order_detail_summary.setText(summary_text + " · 포장 제외")
@@ -5238,7 +5248,7 @@ class MainWindow(QMainWindow):
 
         footer = QHBoxLayout()
         self.collection_schedule_note = QLabel(
-            "주기 변경은 즉시 저장됩니다. · 불필요 데이터는 실행 후 자동 정리하고 6시간마다 반복합니다."
+            "주기 변경은 즉시 저장됩니다. · 업데이트 후 정상 자료 반영 시 안전 정리하고, 이후 하루 한 번 정리합니다."
         )
         self.collection_schedule_note.setObjectName("CollectionNotice")
         footer.addWidget(self.collection_schedule_note)
@@ -5543,6 +5553,10 @@ class MainWindow(QMainWindow):
     def _refresh_delivery_group_labels(self):
         report=self._read_refresh_status(DATA_CENTER_DIR/'backward-v1/settings/delivery_status.json')
         if not report:return
+        package_details = report.get('package_details') or (report.get('server', {}).get('state') or {}).get('details') or {}
+        waiting_reason = str(package_details.get('reason') or '') if report.get('status') == 'waiting_source' else ''
+        if waiting_reason and package_details.get('required'):
+            waiting_reason += f" · 자료 {package_details.get('ready', 0)}/{package_details['required']} 준비"
         def local_clock(value):
             if not value:return '-'
             try:return datetime.fromisoformat(str(value)).astimezone().strftime('%m-%d %H:%M:%S')
@@ -5554,13 +5568,18 @@ class MainWindow(QMainWindow):
             ready=bool(view) and not report.get('aps_view_error') if key=='aps' else report.get('status')=='success'
             state='조회 가능' if key=='aps' and ready else {'success':'계산 반영 완료','receiving':'계산 반영 중','waiting_source':'생산 현황 대기'}.get(report.get('status'),'확인 중')
             if key=='aps' and report.get('aps_view_error'):state='APS 수신 확인 필요'
+            if key=='live' and waiting_reason:
+                state = str(package_details.get('reason'))
             controls['state'].setText(state)
+            controls['state'].setToolTip(str(report.get('message') or waiting_reason))
             controls['state'].setStyleSheet('color: #059669;' if ready else 'color: #d97706;')
             stamp=local_clock(report.get('received_at')) if key=='live' else view.get('aps_key',report.get('aps_key','-'))
             applied=view.get('applied_at',report.get('applied_at')) if key=='aps' else report.get('applied_at')
             controls['refreshed'].setText(f"자료 {stamp}\nPC 반영 {local_clock(applied)}")
             controls['refreshed'].setToolTip('서버 확인 '+local_clock(report.get('checked_at')))
         self.settings_data_status.setText('① APS 먼저 조회 · ② 같은 회차 생산 현황으로 계산 · '+{'success':'계산 반영 완료', 'receiving':'계산 반영 중', 'waiting_source':'생산 현황 대기'}.get(report.get('status'), '확인 중'))
+        if waiting_reason:
+            self.settings_data_status.setText('① APS 먼저 조회 · ② ' + waiting_reason)
         for page in [getattr(self,'process_overview_page',None),getattr(self,'live_need_page',None),getattr(self,'lot_work_order_page',None),getattr(self,'inventory_page',None),*getattr(self,'fixed_process_pages',{}).values(),*getattr(self,'live_fixed_process_pages',{}).values(),*getattr(self,'lot_fixed_process_pages',{}).values()]:
             if page and hasattr(page,'refresh_delivery_notice'):page.refresh_delivery_notice()
 
@@ -5766,7 +5785,9 @@ class MainWindow(QMainWindow):
             self.settings_cleanup_button.setText("정리 중…")
         process = _background_process(self)
         process.setWorkingDirectory(str(ROOT_DIR))
-        program, arguments = _collector_process_command("data_retention_cleanup.py")
+        program, arguments = _collector_process_command("safe_stage_cleanup.py")
+        if not scheduled:
+            arguments.append('--force')
         process.setProgram(program)
         process.setArguments(arguments)
         process.finished.connect(self._data_cleanup_finished)
@@ -5788,9 +5809,12 @@ class MainWindow(QMainWindow):
             result = {}
         if hasattr(self, "collection_schedule_note"):
             removed_mb = float(result.get("removed_bytes") or 0) / (1024 * 1024)
-            self.collection_schedule_note.setText(
-                f"자동 정리 완료 · 파일 {int(result.get('removed_files') or 0):,}개 · {removed_mb:,.1f}MB 확보 · 6시간마다 실행"
-            )
+            if result.get('status') in ('success','skipped'):
+                self.collection_schedule_note.setText(
+                    f"안전 정리 · {str(result.get('cleaned_at') or '')[:16]} · 임시 폴더 {int(result.get('removed_folders') or 0):,}개 · {removed_mb:,.1f}MB 확보 · 하루 한 번"
+                )
+            else:
+                self.collection_schedule_note.setText('안전 정리 보류 · '+str(result.get('reason') or '정상 자료 반영 후 다시 확인합니다.'))
 
     def _start_full_data_refresh(self) -> None:
         if (
@@ -6254,6 +6278,7 @@ class MainWindow(QMainWindow):
         if source == "aps":
             QTimer.singleShot(250, lambda: self._start_data_collection("all", scheduled=True))
         QTimer.singleShot(1_000, self._run_scheduled_collections)
+        QTimer.singleShot(5_000, lambda: self._start_data_cleanup(scheduled=True))
 
     def _data_collection_process_error(self, source: str, process_error) -> None:
         if process_error != QProcess.ProcessError.FailedToStart:

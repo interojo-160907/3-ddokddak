@@ -50,11 +50,21 @@ def _connect(path: Path) -> sqlite3.Connection:
     return connection
 
 
-def _live_cycle_matches() -> bool:
+def _dashboard_aps_paths() -> tuple[Path, Path]:
+    """Use the same independently published APS as the process overview."""
+    from services.aps_display import ApsDisplayService
+    folder = ApsDisplayService()._view_folder()
+    if folder:
+        return folder / 'aps_process_status.sqlite', folder / 'snapshot/refresh_status.json'
+    return safe_mode.database(APS_DB), safe_mode.status_path(APS_STATUS)
+
+
+def _live_cycle_matches(aps_status: dict | None = None) -> bool:
     """실시간 계산이 현재 APS 회차를 기준으로 만들어졌는지 확인한다."""
     if safe_mode.active() or not LIVE_DB.is_file():
         return False
-    aps_status = _status(safe_mode.status_path(APS_STATUS))
+    if aps_status is None:
+        aps_status = _status(_dashboard_aps_paths()[1])
     aps_cycle = str(aps_status.get("source_refreshed_at") or "").strip()
     live_status = _status(LIVE_STATUS)
     live_cycle = str(live_status.get("aps_source_refreshed_at") or "").strip()
@@ -81,9 +91,10 @@ def _order_remarks(connection: sqlite3.Connection) -> dict[str, str]:
 
 class DashboardService:
     def available(self) -> bool:
-        return safe_mode.database(APS_DB).is_file() and PRODUCTION_DB.is_file()
+        return _dashboard_aps_paths()[0].is_file()
 
     def load(self) -> dict:
+        aps_db, aps_status_path = _dashboard_aps_paths()
         result = {
             "available": self.available(),
             "shortage": {name: 0.0 for name in PROCESS_ORDER},
@@ -115,23 +126,26 @@ class DashboardService:
             "production_periods": {},
             "default_production_period": "previous" if date.today().day == 1 else "current",
             "risks": [],
-            "aps_status": _status(safe_mode.status_path(APS_STATUS)),
+            "aps_status": _status(aps_status_path),
             "live_status": _status(LIVE_STATUS),
             "production_status": _status(PRODUCTION_STATUS),
             "bom_status": _status(BOM_STATUS),
         }
-        if safe_mode.database(APS_DB).is_file():
-            self._load_aps(result)
+        result['live_available'] = _live_cycle_matches(result['aps_status'])
+        if aps_db.is_file():
+            self._load_aps(result, aps_db)
             self._apply_live_risk_status(result)
         if PRODUCTION_DB.is_file():
             self._load_production(result)
         return result
 
     def order_details(self, order_no: str) -> dict:
-        if not safe_mode.database(APS_DB).is_file() or not str(order_no).strip():
+        aps_db, aps_status_path = _dashboard_aps_paths()
+        aps_status = _status(aps_status_path)
+        if not aps_db.is_file() or not str(order_no).strip():
             return {"order": {}, "items": []}
         normalized_order = str(order_no).strip()
-        with closing(_connect(safe_mode.database(APS_DB))) as connection:
+        with closing(_connect(aps_db)) as connection:
             remarks = _order_remarks(connection)
             source = connection.execute(
                 "SELECT so_id,MAX(initial) initial,MIN(due_date) due_date,MAX(cust_name) cust_name,"
@@ -150,7 +164,7 @@ class DashboardService:
         if source is None:
             return {"order": {}, "items": []}
 
-        live_available = _live_cycle_matches()
+        live_available = _live_cycle_matches(aps_status)
         current_by_key: dict[tuple[str, ...], float] = {}
         if live_available:
             try:
@@ -264,7 +278,7 @@ class DashboardService:
     @staticmethod
     def _apply_live_risk_status(result: dict) -> None:
         """APS 리스크 수량을 보존하면서 현재 잔여와 완료 여부를 덧붙인다."""
-        if not result.get("risks") or not _live_cycle_matches():
+        if not result.get("risks") or not _live_cycle_matches(result.get('aps_status')):
             return
         try:
             with closing(_connect(LIVE_DB)) as connection:
@@ -297,8 +311,8 @@ class DashboardService:
             )
 
     @staticmethod
-    def _load_aps(result: dict) -> None:
-        with closing(_connect(safe_mode.database(APS_DB))) as connection:
+    def _load_aps(result: dict, aps_db: Path | None = None) -> None:
+        with closing(_connect(aps_db or _dashboard_aps_paths()[0])) as connection:
             remarks = _order_remarks(connection)
             for row in connection.execute(
                 "SELECT oper_id,SUM(COALESCE(plan_qty,0)) qty FROM aps_plan "

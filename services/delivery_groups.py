@@ -3,6 +3,8 @@ import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+MAX_OBSERVATION_SECONDS = 30 * 60
+MAX_SOURCE_AGE_SECONDS = 65 * 60
 
 def read_pair(connection, *, version=None):
     with connection() as c:
@@ -16,15 +18,17 @@ def read_pair(connection, *, version=None):
         aps = c.execute('SELECT * FROM prod3_delivery.release WHERE version=%s', (data['aps_version'],)).fetchone()
     if not aps or aps['aps_key'] != data['aps_key']:
         raise ValueError('APS 회차 확인 중 · 이전 자료 유지')
-    age=(datetime.now(timezone.utc)-data['received_at']).total_seconds()
+    now = datetime.now(timezone.utc)
+    age=(now-data['received_at']).total_seconds()
     if age < -60: raise ValueError('서버 자료 시각 확인 필요')
-    if age > 3900:
+    if age > MAX_SOURCE_AGE_SECONDS or (now-data['started_at']).total_seconds() > MAX_SOURCE_AGE_SECONDS:
         raise ValueError('서버 생산 현황 갱신 지연 · 이전 자료 유지')
     kst = timezone(timedelta(hours=9))
     if data['received_at'].astimezone(kst).date() != datetime.now(kst).date():
         raise ValueError('오늘 생산 현황 준비 중 · 이전 자료 유지')
-    if (data['received_at']-data['started_at']).total_seconds()>180:
-        raise ValueError('서버 자료 조회 시각 차이 확인 필요')
+    span = (data['received_at']-data['started_at']).total_seconds()
+    if span < 0 or span > MAX_OBSERVATION_SECONDS:
+        raise ValueError('서버 자료 수집 범위 초과 · 30분 이내 묶음 필요')
     from services.data_location import resolve_data_root
     barrier=resolve_data_root()/'backward-v1/settings/manual_refresh_barrier.json'
     if barrier.exists():
@@ -75,5 +79,6 @@ def head_status(connection):
     with connection() as c:
         heads=c.execute('SELECT DISTINCT ON(group_no) group_no,version,aps_key,published_at,started_at,received_at '
                         'FROM prod3_delivery.release ORDER BY group_no,published_at DESC').fetchall()
-        state=c.execute('SELECT checked_at,message,last_error FROM prod3_delivery.state WHERE singleton').fetchone()
+        # SELECT * also works before the server diagnostic migration is installed.
+        state=c.execute('SELECT * FROM prod3_delivery.state WHERE singleton').fetchone()
     return {'groups':heads,'state':state}

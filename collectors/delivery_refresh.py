@@ -19,22 +19,7 @@ from services.collection_lock import serialized_collection
 
 FOLDERS=('bom','production-performance','backward-v1/process-status',
          'backward-v1/live-production-need','backward-v1/inventory-status','backward-v1/settings','backward-v1/dmz-cache')
-EXCLUDE={'backup','backups','snapshots','raw_api','before-publication'}
-
-
-def prune_stages(owner, keep=2):
-    base=Path(tempfile.gettempdir()).resolve()
-    owned=[]
-    for folder in base.glob('prod3-delivery-*'):
-        if not folder.is_dir() or folder.is_symlink() or folder.is_junction() or folder.resolve().parent!=base:continue
-        marker=folder/'delivery-owner.json'
-        try:
-            info=json.loads(marker.read_text('utf-8'))
-            if info.get('owner')==str(owner.resolve()) and info.get('complete'):owned.append(folder)
-        except (OSError,ValueError):continue
-    for folder in sorted(owned,key=lambda p:p.stat().st_mtime,reverse=True)[keep:]:
-        try:shutil.rmtree(folder)
-        except OSError:pass
+EXCLUDE={'backup','backups','snapshots','raw_api','before-publication','recovery'}
 
 
 def copy_inputs(source,destination):
@@ -121,11 +106,15 @@ def main():
                       received_at=data['received_at'],applied_at=datetime.now().astimezone().isoformat())
         save()
         marker.write_text(json.dumps({'owner':str(root.resolve()),'complete':True}),encoding='utf-8')
-        prune_stages(root)
         print(json.dumps(report,ensure_ascii=False,default=str));return 0
     except Exception as exc:
         (settings/'delivery_error.txt').write_text(traceback.format_exc(),encoding='utf-8')
-        report.update(status='waiting_source',message=str(exc));save()
+        server_state = report.get('server', {}).get('state') or {}
+        report['package_details'] = server_state.get('details') or {}
+        message = str(exc)
+        if report['package_details'].get('reason'):
+            message += ' · ' + str(server_state.get('message') or report['package_details']['reason'])
+        report.update(status='waiting_source',message=message);save()
         print(json.dumps(report,ensure_ascii=False,default=str));return 2
 
 if __name__=='__main__':raise SystemExit(main())

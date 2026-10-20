@@ -98,7 +98,7 @@ class UpgradeTests(unittest.TestCase):
 
     def test_version_metadata_is_consistent(self):
         root = Path(__file__).resolve().parents[1]
-        self.assertEqual(APP_VERSION, '3.2.5')
+        self.assertEqual(APP_VERSION, '3.2.6')
         self.assertIn(f'"{APP_VERSION}"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
         version_tuple = tuple(int(part) for part in APP_VERSION.split('.')) + (0,)
         self.assertIn(f'filevers={version_tuple}', (root/'installer/version_info.txt').read_text(encoding='utf-8'))

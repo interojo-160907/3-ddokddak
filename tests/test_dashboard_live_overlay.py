@@ -43,6 +43,44 @@ def _write_database(path: Path, *, current_qty: float) -> None:
 
 
 class DashboardLiveOverlayTest(unittest.TestCase):
+    def setUp(self):
+        p = patch('services.aps_display.ApsDisplayService._view_folder', return_value=None)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_latest_view_removes_old_risk_without_using_previous_live_completion(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            old=root/'old.sqlite';live=root/'live.sqlite'
+            view=root/'view';view.mkdir()
+            latest=view/'aps_process_status.sqlite'
+            _write_database(old,current_qty=2408)
+            _write_database(live,current_qty=0)
+            _write_database(latest,current_qty=0)
+            with closing(sqlite3.connect(latest)) as c:
+                c.execute("INSERT INTO aps_plan SELECT 'O2',initial,due_date,demand_group_id,demand_type,dest_country,100,oper_id,item_id,demand_item_id,demand_item_name,power,demand_qty,cust_name,res_site_id,100 FROM aps_plan")
+                c.commit()
+            _write_status(view/'snapshot/refresh_status.json',{'source_refreshed_at':'NEW','source_identity':'new'})
+            _write_status(root/'live.json',{'status':'success','aps_source_refreshed_at':'OLD','source_identity':'old'})
+            with (patch('services.aps_display.ApsDisplayService._view_folder',return_value=view),
+                  patch.multiple(dashboard_module,APS_DB=old,LIVE_DB=live,LIVE_STATUS=root/'live.json',PRODUCTION_DB=root/'missing')):
+                service=dashboard_module.DashboardService();result=service.load()
+                self.assertEqual([r['order_no'] for r in result['risks']],['O2'])
+                self.assertEqual(result['risks'][0]['risk_qty'],100)
+                self.assertFalse(result['live_available'])
+                self.assertNotIn('work_completed',result['risks'][0])
+                detail=service.order_details('O2')
+                self.assertEqual(detail['order']['aps_remaining_qty'],100)
+                self.assertIsNone(detail['order']['current_remaining_qty'])
+                _write_status(root/'live.json',{'status':'success','aps_source_refreshed_at':'NEW','source_identity':'new'})
+                with closing(sqlite3.connect(live)) as c:
+                    c.execute("UPDATE aps_plan SET so_id='O2'")
+                    c.commit()
+                refreshed=service.load()
+                self.assertEqual(refreshed['risks'][0]['risk_qty'],100)
+                self.assertTrue(refreshed['risks'][0]['work_completed'])
+                self.assertEqual(service.order_details('O2')['order']['current_remaining_qty'],0)
+
     def test_keeps_aps_shortage_and_marks_current_completion(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

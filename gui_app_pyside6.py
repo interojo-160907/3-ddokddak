@@ -34,6 +34,7 @@ COLLECTOR_MODULES = {
     "aps_update_monitor": "collectors.aps_update_monitor",
     "bom_snapshot_collector": "collectors.bom_snapshot_collector",
     "data_retention_cleanup": "collectors.data_retention_cleanup",
+    "safe_stage_cleanup": "collectors.safe_stage_cleanup",
     "process_status_collector": "collectors.process_status_collector",
     "production_performance_collector": "collectors.production_performance_collector",
     "live_production_need_collector": "collectors.live_production_need_collector",
@@ -72,8 +73,11 @@ def run_collector_mode(arguments: list[str]) -> int:
     try:
         sys.argv = [collector_name, *arguments[1:]]
         from services.collection_lock import collection_lock
-        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer), collection_lock():
-            if collector_name != "data_retention_cleanup":
+        # Stage cleanup briefly locks only when retiring one obsolete folder;
+        # its bulk deletion must never hold up normal collection.
+        guard = contextlib.nullcontext() if collector_name == 'safe_stage_cleanup' else collection_lock()
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer), guard:
+            if collector_name not in ("data_retention_cleanup", "safe_stage_cleanup") and not os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
                 from services.data_location import resolve_data_root
                 from services.recovery_backup import ensure_recovery_backup
                 ensure_recovery_backup(resolve_data_root())

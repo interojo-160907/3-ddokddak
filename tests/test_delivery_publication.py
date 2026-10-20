@@ -30,7 +30,7 @@ class PublicationTests(unittest.TestCase):
                   patch('services.delivery_groups.read_pair',return_value=pair),
                   patch.object(receiver.tempfile,'mkdtemp',return_value=str(stage)),
                   patch.object(receiver.subprocess,'run',side_effect=calculate),
-                  patch.object(receiver,'prune_stages'),patch.object(sys,'argv',['delivery_refresh','--full']),
+                  patch.object(sys,'argv',['delivery_refresh','--full']),
                   patch('builtins.print')):
                 self.assertEqual(receiver.main.__wrapped__(),0)
             self.assertEqual(json.loads(preference.read_text())['aps_minutes'],5)

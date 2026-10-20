@@ -24,6 +24,7 @@ a = Analysis(
         "collectors.aps_update_monitor",
         "collectors.bom_snapshot_collector",
         "collectors.data_retention_cleanup",
+        "collectors.safe_stage_cleanup",
         "collectors.process_status_collector",
         "collectors.production_performance_collector",
         "collectors.live_production_need_collector",

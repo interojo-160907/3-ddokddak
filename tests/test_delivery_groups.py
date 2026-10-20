@@ -42,11 +42,24 @@ class DeliveryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'수동'):read_pair(self.reader(a,b))
 
     def test_wide_or_stale_group_is_not_accepted(self):
-        for seconds in (181,4000):
+        for seconds in (1801,4000):
             a,b=self.pair()
-            if seconds==181:b['started_at']=b['received_at']-timedelta(seconds=seconds)
+            if seconds==1801:b['started_at']=b['received_at']-timedelta(seconds=seconds)
             else:b['started_at']-=timedelta(seconds=seconds);b['received_at']-=timedelta(seconds=seconds)
             with self.assertRaises(ValueError):read_pair(self.reader(a,b))
+
+    def test_complete_nine_minute_group_is_accepted(self):
+        a,b=self.pair()
+        b['started_at']=b['received_at']-timedelta(minutes=9)
+        with tempfile.TemporaryDirectory() as d,patch('services.data_location.resolve_data_root',return_value=Path(d)):
+            self.assertEqual(read_pair(self.reader(a,b))[1]['version'],'live1')
+
+    def test_oldest_source_must_also_be_fresh(self):
+        a,b=self.pair()
+        b['received_at']-=timedelta(minutes=60)
+        b['started_at']=b['received_at']-timedelta(minutes=9)
+        with self.assertRaisesRegex(ValueError,'갱신 지연'):
+            read_pair(self.reader(a,b))
 
     def test_mapping_matches_collector_numeric_and_json_contract(self):
         mapping=[{'source':'qty','target':'qty','type':'number'},

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import hashlib
+import json
 from typing import Callable
 from urllib.parse import unquote, urlparse
 
@@ -48,6 +49,10 @@ def installer_destination(update_url: str, latest_version: str, *, save_only: bo
             folder.mkdir(parents=True, exist_ok=True)
             # Each attempt owns its directory: an old running installer cannot lock this file.
             attempt = Path(tempfile.mkdtemp(prefix="download-", dir=folder))
+            (attempt / 'production3-download.json').write_text(json.dumps({
+                'application':'DdokddakProduction3','version':str(latest_version).lstrip('vV'),
+                'installer':file_name,'created_at':time.time(),
+            }),encoding='utf-8')
             return attempt / file_name
         except OSError:
             continue
