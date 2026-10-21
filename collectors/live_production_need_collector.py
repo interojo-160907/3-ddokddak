@@ -839,7 +839,7 @@ def _recalculate_database(
 
 def _backup_and_replace(temporary_db: Path, stamp: str) -> None:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.is_file():
+    if DB_PATH.is_file() and not os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
         shutil.copy2(DB_PATH, BACKUP_DIR / f"current_production_need_before_{stamp}.sqlite")
     _replace_database(temporary_db, DB_PATH)
     backups = sorted(

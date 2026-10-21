@@ -276,7 +276,7 @@ def refresh(api_key: str = "", timeout: int = 240, force_full: bool = False) -> 
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.exists():
+    if DB_PATH.exists() and not os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
         shutil.copy2(DB_PATH, BACKUP_DIR / f"production_performance_before_{stamp}.sqlite")
     source_refreshed_at = max((str(payload.get("source_refreshed_at") or "") for payload in payloads), default="")
     marks = ",".join("?" for _ in range(len(FIELDS) + 2))

@@ -17,7 +17,7 @@ class UpgradeTests(unittest.TestCase):
     def test_initial_full_refresh_bypasses_unchanged_aps_and_incremental_sources(self):
         with patch.object(refresh_all, 'refresh_bom', return_value={'status':'success'}) as bom, patch.object(refresh_all, 'refresh_aps') as monitor_call, patch.object(refresh_all, 'refresh_aps_full', return_value={'status':'success'}) as aps, patch.object(refresh_all, 'refresh_production', return_value={'status':'success'}) as production, patch.object(refresh_all, 'refresh_live', return_value={'status':'success'}) as live, patch.object(refresh_all, '_write_result'), patch('builtins.print'):
             self.assertEqual(refresh_all.main(force_full=True), 0)
-            self.assertTrue(bom.call_args.kwargs['force'])
+            self.assertFalse(bom.call_args.kwargs['force'])  # Unchanged BOM is reusable even during full refresh.
             production.assert_not_called()  # Production is now inside the staged live group.
             live.assert_called_once_with(force_full=True)
             aps.assert_called_once()
@@ -98,7 +98,7 @@ class UpgradeTests(unittest.TestCase):
 
     def test_version_metadata_is_consistent(self):
         root = Path(__file__).resolve().parents[1]
-        self.assertEqual(APP_VERSION, '3.2.6')
+        self.assertEqual(APP_VERSION, '3.3.1')
         self.assertIn(f'"{APP_VERSION}"', (root/'installer/production3.iss').read_text(encoding='utf-8'))
         version_tuple = tuple(int(part) for part in APP_VERSION.split('.')) + (0,)
         self.assertIn(f'filevers={version_tuple}', (root/'installer/version_info.txt').read_text(encoding='utf-8'))

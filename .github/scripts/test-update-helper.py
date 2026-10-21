@@ -11,7 +11,7 @@ if sys.argv[1]=='child':
     raise SystemExit(0)
 root=Path(tempfile.mkdtemp(prefix='real-updater-'))
 old=root/'prior';old.mkdir()
-subprocess.run(['gh','release','download','v3.2.5','--repo','interojo-160907/3-ddokddak','--pattern','ddokddak-production3-setup.exe','--dir',str(old)],check=True)
+subprocess.run(['gh','release','download','v3.2.6','--repo','interojo-160907/3-ddokddak','--pattern','ddokddak-production3-setup.exe','--dir',str(old)],check=True)
 app=root/'app'
 subprocess.run([str(old/'ddokddak-production3-setup.exe'),'/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=',f'/DIR={app}'],check=True,timeout=180)
 import winreg
@@ -27,5 +27,5 @@ assert sentinel.read_text()=='preserve'
 report=root/'smoke.json'
 subprocess.run([str(app/'gui_app_pyside6.exe'),'--package-smoke-test',str(report)],check=True,timeout=60)
 import json
-assert json.loads(report.read_text())['app_version']=='3.2.6'
-print('PASS: real updater helper, parent exit, 3.2.5 -> 3.2.6 installation, restart, data preservation')
+assert json.loads(report.read_text())['app_version']=='3.3.1'
+print('PASS: real updater helper, parent exit, 3.2.6 -> 3.3.1 installation, restart, data preservation')

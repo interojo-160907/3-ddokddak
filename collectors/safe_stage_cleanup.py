@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import uuid
 
 from config import APP_VERSION
@@ -45,13 +46,17 @@ def cleanup(root, base, *, force=False):
     with cleanup_guard(root):
         try:
             previous=core.read_json(status_path) if status_path.exists() else {}
-            bootstrap=core.read_json(root/'backward-v1/settings/version_collection_bootstrap.json')
-            if bootstrap.get('completed_version')!=APP_VERSION:
-                raise ValueError('새 버전의 정상 데이터 반영 후 정리합니다.')
-            core.operational_state(root)
+            bootstrap_path=root/'backward-v1/settings/version_collection_bootstrap.json'
+            bootstrap=core.read_json(bootstrap_path) if bootstrap_path.exists() else {}
+            # Existing verified operating data may safely supersede old temp
+            # stages even before the new-version bootstrap has room to run.
+            current_bootstrap=bootstrap.get('completed_version')==APP_VERSION
+            state=core.operational_state(root)
             if (not force and previous.get('completed_version')==APP_VERSION
-                    and str(previous.get('cleaned_at',''))[:10]==stamp.date().isoformat()):
-                return dict(previous,status='skipped',reason='오늘 안전 정리를 완료했습니다.')
+                    and previous.get('applied_version')==state.get('applied_version')
+                    and stamp.timestamp()-datetime.fromisoformat(previous['cleaned_at']).timestamp()<600):
+                return dict(previous,status='skipped',reason='최근 안전 정리를 완료했습니다.')
+            started=time.monotonic()
             session=core.log_root()/('auto-'+stamp.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8])
             rows,issue=core.scan(base,root)
             if issue:raise ValueError(issue)
@@ -59,11 +64,17 @@ def cleanup(root, base, *, force=False):
             for record,_ in core.pending_retirements(base,root):
                 result['results'].append(core.delete_retired(base,root,record))
             for index,row in enumerate(rows):
+                if time.monotonic()-started>30:
+                    result['results'].append({'status':'deferred','deleted_bytes':0,'reason':'다음 주기에 이어서 정리'})
+                    break
                 if row.eligible:
                     try:
                         result['results'].append(core.clean_one(base,root,row,session/str(index)))
                     except (OSError,ValueError,core.BusyError) as exc:
                         result['results'].append({'path':row.path,'status':'protected','error':str(exc),'deleted_bytes':0})
+            from services.local_storage_cleanup import cleanup_local
+            if current_bootstrap:
+                result['results'].extend(cleanup_local(root))
             from services.update_download_cleanup import cleanup_downloads
             result['results'].extend(cleanup_downloads(APP_VERSION))
             result['removed_bytes']=sum(r.get('deleted_bytes',0) for r in result['results'])
@@ -73,6 +84,7 @@ def cleanup(root, base, *, force=False):
                 result['reason']='사용 중이거나 상태가 바뀐 자료는 보존하고 다음 점검에서 재확인합니다.'
             else:
                 result.update(status='success',cleaned_at=stamp.isoformat(),completed_version=APP_VERSION,
+                              applied_version=state.get('applied_version'),
                               reason='운영 자료와 최신 복구 사본을 보존했습니다.')
         except (OSError,ValueError,TypeError,core.BusyError) as exc:
             result['reason']=str(exc)
@@ -84,6 +96,13 @@ def cleanup(root, base, *, force=False):
 
 
 def main():
+    if os.name=='nt':
+        # Housekeeping yields CPU priority to the interactive production app.
+        import ctypes
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.GetCurrentProcess.restype=ctypes.c_void_p
+        kernel.SetPriorityClass.argtypes=[ctypes.c_void_p,ctypes.c_ulong]
+        kernel.SetPriorityClass(kernel.GetCurrentProcess(),0x00004000)
     if os.getenv('DDOKDDAK_PROD3_PREVIEW')=='1' or os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
         result={'status':'skipped','reason':'미리보기·격리 계산에서는 자동 정리하지 않습니다.'}
     else:

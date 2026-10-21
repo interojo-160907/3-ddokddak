@@ -76,7 +76,9 @@ class DisplayDeliveryTests(unittest.TestCase):
             root=Path(directory);base=root/'backward-v1/aps-view';view=base/'aps-test/backward-v1/process-status'
             view.mkdir(parents=True);(view/'aps_process_status.sqlite').write_bytes(b'view')
             (base/'current.json').write_text('{"folder":"aps-test","aps_key":"20261016-1510"}')
-            with (patch('services.aps_display.resolve_data_root',return_value=root),patch('services.aps_display.safe_mode.active',return_value={})):
+            with (patch('services.aps_display.resolve_data_root',return_value=root),
+                  patch('services.process_status_service.STATUS_PATH',root/'paired-status.json'),
+                  patch('services.aps_display.safe_mode.active',return_value={})):
                 display=ApsDisplayService()
                 self.assertEqual(display.database_path,view/'aps_process_status.sqlite')
                 self.assertNotEqual(display.database_path,ProcessStatusService().database_path)

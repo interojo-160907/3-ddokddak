@@ -343,7 +343,7 @@ def refresh(api_key: str, timeout: int = 240, force: bool = False) -> dict[str, 
             _atomic_json(STATUS_PATH, result)
             return result
 
-    if DB_PATH.is_file():
+    if DB_PATH.is_file() and not os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy2(
             DB_PATH,

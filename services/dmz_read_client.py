@@ -276,6 +276,13 @@ def _valid_rows(rows,source):
     return actual==expected
 
 
+def cache_directory():
+    # Immutable source-ID cache is shared by isolated collection children.
+    # It is not an operating database and never participates in publication.
+    configured = os.getenv('DDOKDDAK_DMZ_CACHE_DIR', '')
+    return Path(configured) if configured else resolve_data_root()/'backward-v1/dmz-cache'
+
+
 def snapshot(source):
     sid = source['snapshot_id']
     with _lock:
@@ -284,7 +291,7 @@ def snapshot(source):
         if sid in _rows:
             _rows.move_to_end(sid)
             return _rows[sid]
-        cache = resolve_data_root()/'backward-v1/dmz-cache'/ (sid+'.json.gz')
+        cache = cache_directory()/ (sid+'.json.gz')
         if cache.exists():
             try:
                 with gzip.open(cache,'rt',encoding='utf-8') as f: value=json.load(f)
@@ -429,7 +436,7 @@ def request_json(endpoint,params=None,**kwargs):
 def delivery_snapshot(source):
     from services.delivery_groups import mapped_rows
     sid=source['snapshot_id']
-    path=resolve_data_root()/'backward-v1/dmz-cache'/(sid+'.delivery.json.gz')
+    path=cache_directory()/(sid+'.delivery.json.gz')
     rows=None
     if path.exists():
         try:

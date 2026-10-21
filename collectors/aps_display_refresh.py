@@ -24,6 +24,7 @@ def receive_aps_view(root, head):
     # Each successful generation is immutable; current.json is the only switch.
     stage = Path(tempfile.mkdtemp(prefix='aps-', dir=base))
     env = os.environ.copy()
+    env['DDOKDDAK_DMZ_CACHE_DIR'] = str(root/'backward-v1/dmz-cache')
     env.update(DDOKDDAK_PROD3_STAGE_ROOT=str(stage), DDOKDDAK_PROD3_TRANSPORT='dmz',
                DDOKDDAK_APS_VIEW_VERSION=head['version'])
     env.pop('DDOKDDAK_DELIVERY_VERSION', None)

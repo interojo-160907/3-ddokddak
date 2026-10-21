@@ -134,9 +134,12 @@ def _refresh(*, force_full: bool = False, service=None, progress_path=None) -> d
         report['phase'] = '재고 현황 규격 조회·계산'
         save_report()
         try:
-            with closing(sqlite3.connect(DB_PATH.as_uri() + '?mode=ro', uri=True)) as src:
-                with closing(sqlite3.connect(folder / 'current_production_need.sqlite')) as dst:
-                    src.backup(dst)
+            # The delivery parent already isolates this entire calculation.
+            # No second copy of the live database is needed for diagnostics.
+            if not os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
+                with closing(sqlite3.connect(DB_PATH.as_uri() + '?mode=ro', uri=True)) as src:
+                    with closing(sqlite3.connect(folder / 'current_production_need.sqlite')) as dst:
+                        src.backup(dst)
             data = service.build(allow_network=True, collecting=True)
             data['_complete_cycle'] = stamp
             data['_calculated_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
@@ -186,6 +189,22 @@ def refresh(*, force_full: bool = False) -> dict:
                 report[key] = state
             live_collector._atomic_json(published.cache / 'refresh_status.json',report)
             return report
+    # A delivery child works exclusively in a private data root. Its parent
+    # publishes only if the complete calculation succeeds, so nesting another
+    # full copy and rollback group here doubles I/O without improving safety.
+    if os.getenv('DDOKDDAK_PROD3_STAGE_ROOT') and os.getenv('DDOKDDAK_DELIVERY_VERSION'):
+        report = _refresh(force_full=force_full, service=published)
+        report['transport'] = os.getenv('DDOKDDAK_PROD3_TRANSPORT', 'dmz')
+        if server_cycle:
+            report['server_cycle'] = server_cycle
+        if report['status']=='success':
+            for database,status_path in ((DB_PATH,STATUS_PATH),(production.DB_PATH,production.STATUS_PATH)):
+                state=live_collector._read_json(status_path)
+                state.update(database=str(database),complete_cycle=report['cycle_id'])
+                if server_cycle:state['server_cycle']=server_cycle
+                live_collector._atomic_json(status_path,state)
+        live_collector._atomic_json(published.cache / 'refresh_status.json', report)
+        return report
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     folder = published.cache / 'snapshots' / stamp
     stage_cache = folder / 'inventory'

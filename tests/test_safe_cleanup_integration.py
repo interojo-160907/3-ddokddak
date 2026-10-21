@@ -33,14 +33,16 @@ class AutomaticCleanupTests(unittest.TestCase):
             self.assertEqual(cleaner.cleanup(self.owner,self.base)['status'],'skipped')
         self.assertEqual((self.owner/'bom/product_reference.sqlite').read_bytes(),b'OPERATING DATABASE')
 
-    def test_old_version_and_failed_collection_block_automatic_deletion(self):
+    def test_old_version_can_reclaim_superseded_temp_before_bootstrap(self):
         old=self.stage('auto-protected')
         (self.settings/'version_collection_bootstrap.json').write_text('{"completed_version":"2.0.0"}')
-        self.assertEqual(cleaner.cleanup(self.owner,self.base)['status'],'deferred')
-        self.assertTrue(old.exists())
+        with patch('services.delivery_stage_cleanup.log_root',return_value=self.root/'logs'):
+            self.assertEqual(cleaner.cleanup(self.owner,self.base)['status'],'success')
+        self.assertFalse(old.exists())
+        old=self.stage('failed-without-location')
         (self.settings/'version_collection_bootstrap.json').write_text(json.dumps({'completed_version':APP_VERSION}))
         self.status['status']='waiting_source';self.save_status()
-        self.assertEqual(cleaner.cleanup(self.owner,self.base)['status'],'deferred')
+        self.assertEqual(cleaner.cleanup(self.owner,self.base,force=True)['status'],'deferred')
         self.assertTrue(old.exists())
 
     def test_isolated_collector_never_cleans_real_temp(self):

@@ -57,7 +57,7 @@ def main(force_full: bool | None = None) -> int:
     _write_result(report)
     base_collectors = (
         ("aps", lambda: (refresh_aps_full if force_full else refresh_aps)(api_key=api_key, timeout=300)),
-        ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=True)),
+        ("bom", lambda: refresh_bom(api_key=api_key, timeout=240, force=False)),
     )
     failed = False
     # Settle reference snapshots before the staged business-data group.

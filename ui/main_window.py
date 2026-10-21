@@ -1334,7 +1334,7 @@ class MainWindow(QMainWindow):
         self.collection_scheduler_timer.timeout.connect(self._run_scheduled_collections)
         self.collection_scheduler_timer.start()
         self.data_cleanup_timer = QTimer(self)
-        self.data_cleanup_timer.setInterval(30 * 60 * 1_000)
+        self.data_cleanup_timer.setInterval(10 * 60 * 1_000)
         self.data_cleanup_timer.timeout.connect(lambda: self._start_data_cleanup(scheduled=True))
         self.data_cleanup_timer.start()
         self.permission_check_timer = QTimer(self)
@@ -5811,7 +5811,7 @@ class MainWindow(QMainWindow):
             removed_mb = float(result.get("removed_bytes") or 0) / (1024 * 1024)
             if result.get('status') in ('success','skipped'):
                 self.collection_schedule_note.setText(
-                    f"안전 정리 · {str(result.get('cleaned_at') or '')[:16]} · 임시 폴더 {int(result.get('removed_folders') or 0):,}개 · {removed_mb:,.1f}MB 확보 · 하루 한 번"
+                    f"안전 정리 · {str(result.get('cleaned_at') or '')[:16]} · {removed_mb:,.1f}MB 확보 · 정상 반영 후·10분 주기"
                 )
             else:
                 self.collection_schedule_note.setText('안전 정리 보류 · '+str(result.get('reason') or '정상 자료 반영 후 다시 확인합니다.'))

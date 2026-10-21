@@ -334,7 +334,7 @@ def _refresh_snapshot(api_key, timeout, before):
         connection.close()
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    if DB_PATH.exists():
+    if DB_PATH.exists() and not os.getenv('DDOKDDAK_PROD3_STAGE_ROOT'):
         shutil.copy2(DB_PATH, BACKUP_DIR / f"aps_process_status_before_{stamp}.sqlite")
     temporary_db.replace(DB_PATH)
     _prune(BACKUP_DIR, "aps_process_status_before_*.sqlite", 10)

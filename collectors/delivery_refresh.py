@@ -18,21 +18,46 @@ from services.collection_staging import publish_group,recover_publication
 from services.collection_lock import serialized_collection
 
 FOLDERS=('bom','production-performance','backward-v1/process-status',
-         'backward-v1/live-production-need','backward-v1/inventory-status','backward-v1/settings','backward-v1/dmz-cache')
+         'backward-v1/live-production-need','backward-v1/inventory-status','backward-v1/settings')
 EXCLUDE={'backup','backups','snapshots','raw_api','before-publication','recovery'}
+
+
+def input_files(base):
+    """Prune archive directories before traversing, rather than after rglob."""
+    from services.delivery_stage_cleanup import plain_path
+    plain_path(base)
+    for directory, folders, names in os.walk(base, followlinks=False):
+        folders[:] = [name for name in folders if name not in EXCLUDE]
+        for name in folders:
+            plain_path(Path(directory)/name)
+        for name in names:
+            path=Path(directory)/name
+            plain_path(path)
+            if not name.endswith(('-wal','-shm','.lock','.tmp')):
+                yield path
 
 
 def copy_inputs(source,destination):
     for folder in FOLDERS:
         base=source/folder
         if not base.exists():continue
-        for file in base.rglob('*'):
-            if not file.is_file() or EXCLUDE.intersection(file.relative_to(base).parts):continue
-            if file.name.endswith(('-wal','-shm','.lock','.tmp')):continue
+        for file in input_files(base):
             target=destination/file.relative_to(source);target.parent.mkdir(parents=True,exist_ok=True)
             if file.suffix in ('.sqlite','.db'):
                 with closing(sqlite3.connect(file.as_uri()+'?mode=ro',uri=True)) as a,closing(sqlite3.connect(target)) as b:a.backup(b)
             else:shutil.copy2(file,target)
+
+
+def check_working_space(root):
+    size=sum(p.stat().st_size for folder in FOLDERS if (root/folder).exists()
+             for p in input_files(root/folder))
+    # Reserve both next-copy and rollback/working space before a large write.
+    # This is a conservative estimate, not a guarantee for growing server data.
+    required=max(512*1024**2, int(size*2.5))
+    if shutil.disk_usage(tempfile.gettempdir()).free < required:
+        raise ValueError(f'임시 작업 공간 부족 · 약 {required/1024**3:.1f}GB 여유 필요 · 불필요 데이터 정리 후 다시 수신합니다')
+    if shutil.disk_usage(root).free < max(256*1024**2,size):
+        raise ValueError('로컬 저장소 반영 공간 부족 · 불필요 데이터 정리 후 다시 수신합니다')
 
 
 @serialized_collection
@@ -65,6 +90,7 @@ def main():
         if previous.get('applied_version')==data['version']:
             pending=any(h['group_no']==1 and h['version']!=aps['version'] for h in report['server']['groups'])
             report.update(status='waiting_source' if pending else 'success',message='새 APS의 생산 현황 준비 중 · 이전 완성본 유지' if pending else '양호');save();return 0
+        check_working_space(root)
         report.update(status='receiving',message='수집계산중');save()
         stage=Path(tempfile.mkdtemp(prefix='prod3-delivery-'))
         marker=stage/'delivery-owner.json'
@@ -72,6 +98,7 @@ def main():
         report['stage_path']=str(stage);save()
         copy_inputs(root,stage)
         env=os.environ.copy();env['DDOKDDAK_PROD3_STAGE_ROOT']=str(stage)
+        env['DDOKDDAK_DMZ_CACHE_DIR']=str(root/'backward-v1/dmz-cache')
         env['DDOKDDAK_PROD3_TRANSPORT']='dmz';env['DDOKDDAK_DELIVERY_VERSION']=data['version']
         env.pop('DDOKDDAK_APS_VIEW_VERSION',None)
         command=[sys.executable]+([] if getattr(sys,'frozen',False) else [str(ROOT/'gui_app_pyside6.py')])+['--collector','refresh_all']
@@ -84,11 +111,13 @@ def main():
         full=json.loads((stage/'backward-v1/settings/full_refresh_status.json').read_text('utf-8'))
         if full.get('results',{}).get('live',{}).get('status')!='success':raise ValueError('생산 현황 계산 미완료 · 기존 유지')
         pairs=[]
+        bom_unchanged=full.get('results',{}).get('bom',{}).get('status')=='skipped'
         for folder in FOLDERS:
             base=stage/folder
             if not base.exists():continue
-            for file in base.rglob('*'):
-                if not file.is_file() or EXCLUDE.intersection(file.relative_to(base).parts):continue
+            for file in input_files(base):
+                if bom_unchanged and file.relative_to(stage).as_posix()=='bom/product_reference.sqlite':
+                    continue  # Avoid backing up and republishing an unchanged GB-sized BOM.
                 if file.name in ('delivery_status.json','delivery_publication.json') or file.name.endswith(('-wal','-shm','.lock','.tmp')):continue
                 # Settings may have changed in the GUI while this copy calculated.
                 if folder=='backward-v1/settings' and file.name!='full_refresh_status.json':continue
@@ -101,11 +130,18 @@ def main():
                     file.write_text(json.dumps(relocate(json.loads(file.read_text('utf-8'))),ensure_ascii=False,default=str),encoding='utf-8')
                 pairs.append((file,root/file.relative_to(stage)))
         publish_group(pairs,stage,journal)
+        # Publication is complete and each published database is readable.
+        # Collectors already perform full integrity checks before publication.
+        for _, target in pairs:
+            if target.suffix in ('.sqlite', '.db'):
+                with closing(sqlite3.connect(target.as_uri()+'?mode=ro',uri=True)) as db:
+                    db.execute('SELECT name FROM sqlite_master LIMIT 1').fetchall()
+        marker.write_text(json.dumps({'owner':str(root.resolve()),'complete':True}),encoding='utf-8')
         report.update(status='success',message='양호',applied_version=data['version'],
                       aps_version=aps['version'],aps_key=aps['aps_key'],started_at=data['started_at'],
-                      received_at=data['received_at'],applied_at=datetime.now().astimezone().isoformat())
+                      received_at=data['received_at'],applied_at=datetime.now().astimezone().isoformat(),
+                      completed_stage_path=str(stage),stage_path='',publication_verified=True)
         save()
-        marker.write_text(json.dumps({'owner':str(root.resolve()),'complete':True}),encoding='utf-8')
         print(json.dumps(report,ensure_ascii=False,default=str));return 0
     except Exception as exc:
         (settings/'delivery_error.txt').write_text(traceback.format_exc(),encoding='utf-8')

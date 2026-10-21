@@ -81,7 +81,7 @@ class ApiHealthTests(unittest.TestCase):
         w=SimpleNamespace(dashboard_data=self.statuses(),_current_page='settings',
             LIVE_PROCESS_NAV={},LOT_PROCESS_NAV={},header_meta=QLabel(),aps_basis_note=QLabel(),data_status=QPushButton(),
             _mode_error='',_api_health_details=details,_read_collection_errors=lambda:{})
-        with patch('ui.main_window.safe_mode.active',return_value={}):
+        with patch('ui.main_window.safe_mode.active',return_value={}), patch.object(MainWindow,'_read_refresh_status',return_value={}):
             MainWindow._refresh_header_status(w)
             self.assertIn('APS 응답 대기',w.data_status.text())
             self.assertIn('#EFF6FF',w.data_status.styleSheet())
