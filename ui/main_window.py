@@ -1902,6 +1902,7 @@ class MainWindow(QMainWindow):
         self._add_page("inventory", self.inventory_page)
         self.lidding_page = LiddingInventoryPage()
         self._add_page("lidding", self.lidding_page)
+        self.lidding_page.status_changed.connect(self._refresh_header_status)
         self._add_page("settings", self._build_settings_page())
 
         root.addWidget(sidebar)
