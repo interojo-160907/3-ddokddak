@@ -40,6 +40,10 @@ def run(report_path: str) -> int:
         rows = ProcessStatusService(database_path=database).load_rows()
         assert len(rows) == 1
         assert [rows[0][k] for k in ['사출','분리','하이드레이션','접착','누수규격']] == [1444,1444,1067,1065,1008]
+    from ui.lidding_inventory_page import LiddingInventoryPage
+    from unittest.mock import patch
+    with patch("services.data_location.resolve_data_root",return_value=Path(directory)):
+        lidding=LiddingInventoryPage();lidding.timer.stop();app.processEvents();lidding.close();lidding.deleteLater()
     widget.close()
     from services.update_smoke_test import run as update_buttons
     update_checks = update_buttons()

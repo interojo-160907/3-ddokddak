@@ -151,6 +151,7 @@ from services.api_health import check_collection_api_details, record_health, con
 from services import safe_mode
 from ui.bom_page import BomStatusPage
 from ui.inventory_master_page import InventoryStatusPage
+from ui.lidding_inventory_page import LiddingInventoryPage
 from ui.message_dialog import ask_app_confirmation, show_app_message
 from ui.notice_ticker import NoticeTicker
 from ui.permission_dialog import show_permission_denied
@@ -199,6 +200,7 @@ PAGES = (
     PageDefinition("inspection", "검사·접착 공정", "검사·접착 공정의 생산계획과 최근 실적, 납기 위험을 확인합니다.", "공정 현황"),
     PageDefinition("leak", "누수·규격 공정", "누수·규격 공정의 생산계획과 최근 실적, 납기 위험을 확인합니다.", "공정 현황"),
     PageDefinition("bom", "BOM 현황", "판매코드부터 생산·분리·사출·하위자재까지 BOM 연결관계를 확인합니다.", "제품 구성정보"),
+    PageDefinition("lidding", "리드지 재고 현황", "", "생산3팀 · 재고"),
     PageDefinition("inventory", "재고 현황", "부족제품의 전체 파워별 재고 및 생산 부족수량을 확인합니다.", "생산3팀 · 재고"),
     PageDefinition("settings", "설정 및 운영", "데이터 저장 위치와 갱신 상태, 프로그램 업데이트 정보를 관리합니다.", "프로그램 관리"),
 )
@@ -1758,7 +1760,7 @@ class MainWindow(QMainWindow):
         self._set_lot_process_expanded(False)
 
         self._add_nav(menu_layout, "bom", "BOM 현황", "fa6s.diagram-project")
-        self._add_nav(menu_layout, "inventory", "재고 현황", "fa6s.boxes-stacked")
+        self._add_inventory_nav(menu_layout)
         menu_layout.addStretch()
 
         settings_separator = QFrame()
@@ -1898,6 +1900,8 @@ class MainWindow(QMainWindow):
         self.inventory_page.refresh_requested.connect(lambda: self._start_data_collection('live'))
         self.inventory_page.process_requested.connect(self.show_page)
         self._add_page("inventory", self.inventory_page)
+        self.lidding_page = LiddingInventoryPage()
+        self._add_page("lidding", self.lidding_page)
         self._add_page("settings", self._build_settings_page())
 
         root.addWidget(sidebar)
@@ -1920,7 +1924,48 @@ class MainWindow(QMainWindow):
         self.nav_buttons[key] = button
         layout.addWidget(button)
 
+    def _add_inventory_nav(self, layout):
+        row = QWidget()
+        line = QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(2)
+        self._add_nav(line, "inventory", "재고 현황", "fa6s.boxes-stacked")
+        self.lidding_toggle = QPushButton()
+        self.lidding_toggle.setObjectName('SidebarFoldButton')
+        self.lidding_toggle.setFixedSize(36, 42)
+        self.lidding_toggle.setIconSize(QSize(11, 11))
+        self.lidding_toggle.setCursor(Qt.PointingHandCursor)
+        self.lidding_toggle.setAccessibleName('재고 현황 하위 메뉴 펼치기 접기')
+        line.addWidget(self.lidding_toggle)
+        layout.addWidget(row)
+        self.lidding_children = QWidget()
+        children = QVBoxLayout(self.lidding_children)
+        children.setContentsMargins(14, 0, 0, 0)
+        children.setSpacing(2)
+        self._add_nav(children, 'lidding', '리드지 재고 현황', 'fa6s.box', compact=True)
+        layout.addWidget(self.lidding_children)
+        self.lidding_toggle.clicked.connect(self.toggle_lidding)
+        self._set_lidding_expanded(False)
+
+    def toggle_lidding(self):
+        self._set_lidding_expanded(not self.lidding_expanded)
+
+    def _set_lidding_expanded(self, expanded):
+        self.lidding_expanded = bool(expanded)
+        self.lidding_children.setVisible(self.lidding_expanded)
+        icon = 'fa6s.chevron-down' if expanded else 'fa6s.chevron-right'
+        action = '접기' if expanded else '펼치기'
+        self.lidding_toggle.setIcon(qta.icon(icon, color='#64748B'))
+        self.lidding_toggle.setToolTip(f'재고 현황 하위 메뉴 {action}')
+        self.lidding_toggle.setAccessibleName(f'재고 현황 하위 메뉴 {action}')
+        self.lidding_toggle.setProperty('expanded', self.lidding_expanded)
+        self.lidding_toggle.style().unpolish(self.lidding_toggle)
+        self.lidding_toggle.style().polish(self.lidding_toggle)
+        self._update_sidebar_fold_button()
+
     def _handle_sidebar_navigation(self, page_key: str) -> None:
+        if page_key in ("inventory", "lidding"):
+            self._set_lidding_expanded(True)
         if page_key == "process_overview" or page_key in self.PROCESS_KEYS:
             self.process_container.setVisible(True)
         elif page_key == "live_need":
@@ -1931,7 +1976,7 @@ class MainWindow(QMainWindow):
         self.show_page(page_key)
 
     def _sidebar_any_expanded(self) -> bool:
-        return any(not getattr(self, name).isHidden() for name in ('live_process_container', 'lot_process_container') if hasattr(self, name))
+        return any(not getattr(self, name).isHidden() for name in ('live_process_container', 'lot_process_container', 'lidding_children') if hasattr(self, name))
 
     def _update_sidebar_fold_button(self) -> None:
         if not hasattr(self, "sidebar_fold_button"): return
@@ -1943,6 +1988,7 @@ class MainWindow(QMainWindow):
         self.process_container.setVisible(True)
         self._set_live_process_expanded(expanded)
         self._set_lot_process_expanded(expanded)
+        if hasattr(self,"lidding_children"):self._set_lidding_expanded(expanded)
 
     def _toggle_live_process_container(self) -> None:
         self._set_live_process_expanded(not self.live_process_expanded)
@@ -2249,11 +2295,17 @@ class MainWindow(QMainWindow):
                     ("같은 APS 회차의 재고·실적 반영" if self.dashboard_data.get('live_available')
                      else "APS 필요수량 기준 · 같은 회차 실적 준비 전"))
         self.aps_basis_note.setText(note)
-        self.aps_basis_note.setVisible(bool(note))
+        self.aps_basis_note.hide()
+        self.header_meta.setToolTip(note)
         self.header_meta.setText(f"APS 갱신  {aps_fresh}")
+        if self._current_page == "lidding" and self.lidding_page.bundle:
+            self.header_meta.setText("APS 갱신  " + self.lidding_page.bundle["aps_at"])
         info = safe_mode.active()
         if info:
             self.header_meta.setText(f"안전모드 · {info['label']}")
+        if self._current_page == "lidding":
+            bundle=self.lidding_page.bundle
+            self.header_meta.setText("APS 갱신  " + bundle["aps_at"] if bundle else "리드지 패키지 수신 대기")
         self.header_meta.setStyleSheet("QLabel { color:#9A5700; background:#FFF5DF; border:1px solid #E8BF6A; border-radius:8px; padding:7px 12px; }" if info else "")
         if self._mode_error:
             self.header_meta.setText(self.header_meta.text() + (" · 모드 확인 지연" if self._mode_transient and self._mode_failures < 3 else " · 모드 확인 필요"))
@@ -5826,6 +5878,7 @@ class MainWindow(QMainWindow):
         self._start_data_collection("all")
 
     def _reset_page_filters_to_defaults(self) -> None:
+        if hasattr(self,"lidding_page"):self.lidding_page.reset_filters()
         if hasattr(self, "risk_channel_checks"):
             for channel, check in self.risk_channel_checks.items():
                 check.setChecked(channel == "해외")
@@ -5872,6 +5925,7 @@ class MainWindow(QMainWindow):
             self._data_db_signatures = self._current_data_db_signatures()
             self._data_status_signatures = self._current_data_status_signatures()
             self._reload_changed_data_views({"bom", "aps", "production", "live"})
+            self.lidding_page.reload_data()
         finally:
             if button is not None:
                 button.setText("새로고침")

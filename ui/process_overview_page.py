@@ -1294,7 +1294,7 @@ class ProcessOverviewPage(QWidget):
         from services.aps_display import delivery_note
         text = delivery_note('aps' if type(self).__name__ == 'ProcessOverviewPage' else 'live')
         self.delivery_notice.setText(text)
-        self.delivery_notice.setVisible(bool(text))
+        self.delivery_notice.hide()
 
     def _market_changed(self, selected: QPushButton) -> None:
         market = str(selected.property("market") or ""); all_button = self.market_buttons[0]; categories = self.market_buttons[1:]

@@ -18,7 +18,8 @@ from services.collection_staging import publish_group,recover_publication
 from services.collection_lock import serialized_collection
 
 FOLDERS=('bom','production-performance','backward-v1/process-status',
-         'backward-v1/live-production-need','backward-v1/inventory-status','backward-v1/settings')
+         'backward-v1/live-production-need','backward-v1/inventory-status','backward-v1/settings',
+         'backward-v1/lidding')
 EXCLUDE={'backup','backups','snapshots','raw_api','before-publication','recovery'}
 
 
@@ -87,7 +88,8 @@ def main():
         if latest_aps and latest_aps['version']!=aps['version']:
             raise ValueError('새 APS 조회 가능 · 같은 회차 생산 현황 준비 중 · 이전 계산 유지')
         report['available_version']=data['version']
-        if previous.get('applied_version')==data['version']:
+        from services.lidding_data import cache_ready, cache_path, download as receive_lidding
+        if previous.get('applied_version')==data['version'] and cache_ready(root,data['version']):
             pending=any(h['group_no']==1 and h['version']!=aps['version'] for h in report['server']['groups'])
             report.update(status='waiting_source' if pending else 'success',message='새 APS의 생산 현황 준비 중 · 이전 완성본 유지' if pending else '양호');save();return 0
         check_working_space(root)
@@ -110,6 +112,11 @@ def main():
             raise ValueError('완성본 계산 확인 필요 · 기존 자료 유지 (수신 로그 보관)')
         full=json.loads((stage/'backward-v1/settings/full_refresh_status.json').read_text('utf-8'))
         if full.get('results',{}).get('live',{}).get('status')!='success':raise ValueError('생산 현황 계산 미완료 · 기존 유지')
+        receive_lidding(version=data['version'],destination=cache_path(stage))
+        if not cache_ready(stage,data['version']):raise ValueError('리드지 계산 미완료 · 기존 자료 유지')
+        full['results']['lidding']={'status':'success','version':data['version'],'aps_key':aps['aps_key']}
+        (stage/'backward-v1/settings/full_refresh_status.json').write_text(
+            json.dumps(full,ensure_ascii=False,default=str),encoding='utf-8')
         pairs=[]
         bom_unchanged=full.get('results',{}).get('bom',{}).get('status')=='skipped'
         for folder in FOLDERS:
