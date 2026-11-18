@@ -300,8 +300,26 @@ def snapshot(source):
                     return value
             except (OSError,ValueError,KeyError): pass
         with connection() as c:
+            # Item partitions can contain tens of thousands of scattered records.
+            # Reuse the single stored API response only when its full canonical
+            # hash and row count exactly match this immutable published snapshot.
+            raw = None
+            if source['endpoint']=='/api/item-list-bulk' and source.get('content_hash'):
+                record=c.execute('SELECT payload FROM collector_hub.raw_payload WHERE job_id=%s AND run_id=%s LIMIT 1',
+                                 (source['job_id'],source['run_id'])).fetchone()
+                if record:
+                    candidate=record['payload']
+                    if (isinstance(candidate,dict) and not candidate.get('truncated')
+                            and isinstance(candidate.get('rows'),list)
+                            and _valid_rows(candidate['rows'],source)):
+                        raw=candidate
+            if raw is not None:
+                rows=raw['rows']
+                meta={'metadata':{k:v for k,v in raw.items() if k not in ('rows','orders')}}
+            else:
+                rows=None
             meta = c.execute("SELECT payload - 'rows' - 'orders' AS metadata FROM collector_hub.raw_payload WHERE job_id=%s AND run_id=%s LIMIT 1",
-                             (source['job_id'],source['run_id'])).fetchone()
+                             (source['job_id'],source['run_id'])).fetchone() if raw is None else meta
             if not meta and source['endpoint']=='/api/inventory-ledger-product' and _source_clock(
                     {'query_date':source.get('source_version')}):
                 # Daily snapshots outlive raw payload retention; their recorded
@@ -310,8 +328,9 @@ def snapshot(source):
                       'date_from':source['date_from'],'date_to':source['date_to']}}
             if not meta or not isinstance(meta['metadata'],dict):
                 raise RuntimeError('사내 서버 원천 메타 미준비: '+source['dataset'])
-            rows = [r['record'] for r in c.execute('''SELECT record FROM collector_hub.snapshot_record
-                    WHERE snapshot_id=%s ORDER BY ordinal''',(sid,))]
+            if rows is None:
+                rows = [r['record'] for r in c.execute('''SELECT record FROM collector_hub.snapshot_record
+                        WHERE snapshot_id=%s ORDER BY ordinal''',(sid,))]
         if not _valid_rows(rows,source):
             raise RuntimeError('사내 서버 저장 건수 또는 내용 검증 실패: '+source['dataset'])
         value={'rows':rows,'metadata':meta['metadata']}

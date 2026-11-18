@@ -14,6 +14,14 @@ def bundle():
         'prod3_lidding_issue_bstest':[dict(dt1='2026-11-17',cd2='LE200500',out_qty=70,in_qty=0)]})
 
 class LiddingContracts(unittest.TestCase):
+    def test_bootstrap_accepts_verified_unchanged_bom_but_requires_lidding(self):
+        from ui.main_window import _version_bootstrap_ready
+        report={'completed_at':'2026-11-18','results':{k:{'status':'success'} for k in ('bom','aps','production','live')}}
+        report['results']['bom']['status']='skipped'
+        self.assertFalse(_version_bootstrap_ready(report))
+        report['results']['lidding']={'status':'success'}
+        self.assertTrue(_version_bootstrap_ready(report))
+
     def test_total_stock_available_not_only_s(self):
         r=select_rows(build_model(bundle()))[0][0]
         self.assertEqual((r['stock'],r['rate'],r['days']),(1014,10,101.4))

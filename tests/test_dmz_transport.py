@@ -13,6 +13,25 @@ def source(endpoint, sid='snapshot', **extra):
 
 
 class DmzTransportTests(unittest.TestCase):
+
+    def test_item_raw_fast_path_requires_exact_published_hash(self):
+        from unittest.mock import MagicMock
+        import hashlib
+        rows=[{'gd_cd':'PTEST-03.00'}]
+        digest=hashlib.sha256(json.dumps(rows,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+        for valid in (True,False):
+            dmz._rows.clear()
+            descriptor=source('/api/item-list-bulk',job_id='job',run_id='run',dataset='item_codes_p0',content_hash=digest)
+            raw={'rows':rows if valid else [{'gd_cd':'WRONG'}],'truncated':False,'total_count':1}
+            connect=MagicMock();c=connect.return_value.__enter__.return_value
+            replies=[MagicMock(fetchone=lambda:{'payload':raw})]
+            if not valid:replies += [MagicMock(fetchone=lambda:{'metadata':{'total_count':1}}),[{'record':r} for r in rows]]
+            c.execute.side_effect=replies
+            with tempfile.TemporaryDirectory() as d,patch.object(dmz,'cache_directory',return_value=Path(d)),patch.object(dmz,'connection',connect):
+                self.assertEqual(dmz.snapshot(descriptor)['rows'],rows)
+                self.assertEqual(c.execute.call_count,1 if valid else 3)
+        dmz._rows.clear()
+
     def test_automatic_never_calls_http(self):
         row=source('/api/aps-plan')
         with patch.dict(os.environ,{'DDOKDDAK_PROD3_TRANSPORT':'dmz'}), \

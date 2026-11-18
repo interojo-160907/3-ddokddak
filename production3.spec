@@ -47,14 +47,13 @@ a = Analysis(
 # packaging.  Their ICU runtime is not an application dependency and shadows
 # Qt's Windows ICU integration at startup, which makes QtCore fail to load.
 # Keep those foreign helper DLLs out of the distributable.
-_foreign_runtime_markers = ("codex-runtimes", "poppler")
 _foreign_runtime_names = {"icuuc.dll", "icudt78.dll"}
 a.binaries = [
     entry
     for entry in a.binaries
     if not (
         Path(entry[0]).name.lower() in _foreign_runtime_names
-        and all(marker in str(entry[1]).lower() for marker in _foreign_runtime_markers)
+        and "poppler" in str(entry[1]).lower()
     )
 ]
 pyz = PYZ(a.pure)

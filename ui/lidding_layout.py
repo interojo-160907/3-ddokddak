@@ -111,4 +111,3 @@ class LiddingLayout(QWidget):
             group.addButton(button, index); layout.addWidget(button)
         group.buttonClicked.connect(self.filter_rows)
         return group
-

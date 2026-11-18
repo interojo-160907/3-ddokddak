@@ -71,14 +71,16 @@ INVENTORY_STATUS_DATA_DIR = Path(
 
 def _version_bootstrap_ready(full_report: dict) -> bool:
     """Only a fully collected cycle completes first-install initialization."""
-    return _version_base_ready(full_report) and (full_report['results'].get('live') or {}).get('status') == 'success'
+    return (_version_base_ready(full_report)
+            and (full_report['results'].get('live') or {}).get('status') == 'success'
+            and (full_report['results'].get('lidding') or {}).get('status') == 'success')
 
 
 def _version_base_ready(full_report: dict) -> bool:
     results = full_report.get("results") or {}
     required = ("bom", "aps", "production")
     return bool(full_report.get("completed_at")) and all(
-        (results.get(key) or {}).get("status") == "success" for key in required
+        (results.get(key) or {}).get("status") in {"success", "skipped"} for key in required
     )
 
 

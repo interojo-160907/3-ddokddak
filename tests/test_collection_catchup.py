@@ -48,7 +48,7 @@ class VersionBootstrapTests(unittest.TestCase):
             "completed_at": datetime.now().isoformat(timespec="seconds"),
             "results": {
                 key: {"status": "success"}
-                for key in ("bom", "aps", "production", "live")
+                for key in ("bom", "aps", "production", "live", "lidding")
             },
         }
         self.assertTrue(_version_bootstrap_ready(report))
