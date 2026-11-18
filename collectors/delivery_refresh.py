@@ -89,7 +89,11 @@ def main():
             raise ValueError('새 APS 조회 가능 · 같은 회차 생산 현황 준비 중 · 이전 계산 유지')
         report['available_version']=data['version']
         from services.lidding_data import cache_ready, cache_path, download as receive_lidding
-        if previous.get('applied_version')==data['version'] and cache_ready(root,data['version']):
+        # A reinstall can clear the completion report while retaining the
+        # package. Rebuild it once so startup bootstrap can finish.
+        needs_completion_report = '--full' in sys.argv[1:] and not (settings/'full_refresh_status.json').is_file()
+        if (not needs_completion_report and previous.get('applied_version')==data['version']
+                and cache_ready(root,data['version'])):
             pending=any(h['group_no']==1 and h['version']!=aps['version'] for h in report['server']['groups'])
             report.update(status='waiting_source' if pending else 'success',message='새 APS의 생산 현황 준비 중 · 이전 완성본 유지' if pending else '양호');save();return 0
         check_working_space(root)

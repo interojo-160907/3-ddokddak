@@ -50,3 +50,24 @@ class ClassificationQuantityTest(unittest.TestCase):
             if process is None:
                 self.assertEqual(page.lot_classification_buttons["Sph"].text(), "Sph (0)")
             delete(page)
+
+    def test_reused_buttons_refresh_totals_keep_selection_and_connect_once(self):
+        page = DueDetailPage()
+        page._apply_filter = Mock()
+        rows = [{"신규분류요약": "Toric", "공정": {"누수규격": 10}},
+                {"신규분류요약": "Toric", "공정": {"누수규격": 15}},
+                {"신규분류요약": "Sph", "공정": {"누수규격": 0}}]
+        page.load(rows)
+        button = page.classification_buttons['Toric']
+        button.click()
+        for _ in range(10):page.load(rows)
+        self.assertIs(page.classification_buttons['Toric'], button)
+        self.assertTrue(button.isChecked())
+        self.assertEqual(button.text(), 'Toric (25)')
+        page._apply_filter.reset_mock();button.click()
+        page._apply_filter.assert_called_once()
+        page.load([rows[2]])
+        self.assertEqual(set(page.classification_buttons), {'전체','Sph'})
+        self.assertTrue(page.classification_buttons['전체'].isChecked())
+        self.assertEqual(page.classification_buttons['전체'].text(), '전체 (0)')
+        delete(page)

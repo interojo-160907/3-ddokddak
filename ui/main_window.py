@@ -1288,6 +1288,8 @@ class MainWindow(QMainWindow):
         self.page_definitions = {page.key: page for page in PAGES}
         self.active_factory = DEFAULT_FACTORY
         self.dashboard_service = DashboardService()
+        self._data_db_signatures = self._current_data_db_signatures()
+        self._data_status_signatures = self._current_data_status_signatures()
         self.dashboard_data = self.dashboard_service.load()
         self.production_period_key = self.dashboard_data.get("default_production_period", "current")
         self.production_view_mode = "daily"
@@ -1321,8 +1323,6 @@ class MainWindow(QMainWindow):
         self._sync_mode_controls()
         self.notice_ticker.replace_notices(self.management_notices)
         self.show_page("dashboard")
-        self._data_db_signatures = self._current_data_db_signatures()
-        self._data_status_signatures = self._current_data_status_signatures()
         self.data_snapshot_timer = QTimer(self)
         self.data_snapshot_timer.setInterval(10_000)
         self.data_snapshot_timer.timeout.connect(self._check_data_snapshot_changes)
@@ -1364,7 +1364,7 @@ class MainWindow(QMainWindow):
         self.api_health_timer.start()
         QTimer.singleShot(800, self._start_api_health_check)
         self._apply_collection_timers(run_initial=True)
-        QTimer.singleShot(5_000, lambda: self._run_global_refresh(reset_filters=False))
+        QTimer.singleShot(5_000, self._check_data_snapshot_changes)
         QTimer.singleShot(20_000, lambda: self._start_data_cleanup(scheduled=True))
         self.mode_timer = QTimer(self)
         self.mode_timer.setInterval(15_000)
@@ -1512,13 +1512,18 @@ class MainWindow(QMainWindow):
             if signature != self._data_db_signatures.get(key)
         }
         current_status = self._current_data_status_signatures()
-        status_changed = current_status != self._data_status_signatures
-        if not changed and not status_changed:
+        changed_status = {key for key, signature in current_status.items()
+                          if signature != self._data_status_signatures.get(key)}
+        if not changed and not changed_status:
             return
         self._data_db_signatures = current
         self._data_status_signatures = current_status
         if changed:
             self._reload_changed_data_views(changed)
+        elif changed_status == {'delivery'}:
+            # The poll timestamp and connection state are not dashboard inputs.
+            self._refresh_settings_data_status()
+            self._refresh_header_status()
         else:
             self.dashboard_data = self.dashboard_service.load()
             self._close_order_detail()
@@ -1532,7 +1537,7 @@ class MainWindow(QMainWindow):
 
     def _reload_changed_data_views(self, changed: set[str]) -> None:
         if 'inventory' in changed and 'live' not in changed and hasattr(self, 'inventory_page'):
-            self.inventory_page.reload_data()
+            self._refresh_or_defer_page('inventory', self.inventory_page.reload_data)
         self.dashboard_data = self.dashboard_service.load()
         self._close_order_detail()
         self._refresh_risk_alerts()
@@ -1554,11 +1559,11 @@ class MainWindow(QMainWindow):
         if "live" in changed and hasattr(self, "live_need_page"):
             self.live_need_page.reload_data()
             if hasattr(self, 'inventory_page'):
-                self.inventory_page.reload_data()
+                self._refresh_or_defer_page('inventory', self.inventory_page.reload_data)
             for key,page in getattr(self, "live_fixed_process_pages", {}).items():
                 self._refresh_or_defer_page(key,page.reload_data)
             if hasattr(self, "lot_work_order_page"):
-                self.lot_work_order_page.reload_data()
+                self._refresh_or_defer_page('lot_work_order', self.lot_work_order_page.reload_data)
             for key,page in getattr(self, "lot_fixed_process_pages", {}).items():
                 self._refresh_or_defer_page(key,page.reload_data)
         elif "production" in changed:
@@ -6273,9 +6278,14 @@ class MainWindow(QMainWindow):
         self._collection_forced_error_message = ""
         self._collection_live_output = []
         changed = {"bom", "aps", "production", "live"} if source == "all" else {"production", "live"} if source == "live" else {source}
-        self._data_db_signatures = self._current_data_db_signatures()
-        self._data_status_signatures = self._current_data_status_signatures()
-        self._reload_changed_data_views(changed)
+        if getattr(self, '_collection_active_transport', '') == 'dmz':
+            # A successful poll can return the same package. Only reload views
+            # whose local input actually changed, including APS published early.
+            self._check_data_snapshot_changes()
+        else:
+            self._data_db_signatures = self._current_data_db_signatures()
+            self._data_status_signatures = self._current_data_status_signatures()
+            self._reload_changed_data_views(changed)
         if source in {"all", "live", "production", "bom", "aps"}:
             full = self._read_refresh_status(
                 DATA_CENTER_DIR / "backward-v1" / "settings" / "full_refresh_status.json"

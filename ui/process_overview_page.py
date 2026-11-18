@@ -138,6 +138,9 @@ class KpiCard(Card):
 class RowTableModel(QAbstractTableModel):
     """가시 셀만 그리는 대용량 진행현황 표 모델."""
 
+    _VALUE_ROLES = frozenset((int(Qt.DisplayRole), int(Qt.TextAlignmentRole),
+                             int(Qt.ToolTipRole), int(Qt.UserRole), int(Qt.UserRole) + 1))
+
     def __init__(self, columns: list[str], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.columns = columns
@@ -157,6 +160,10 @@ class RowTableModel(QAbstractTableModel):
         return super().headerData(section, orientation, role)
 
     def data(self, index: QModelIndex, role: int = Qt.DisplayRole):
+        # Qt also asks for fonts, backgrounds and decorations for every visible
+        # cell. These roles have no custom value; avoid resolving row data.
+        if role not in self._VALUE_ROLES:
+            return None
         if not index.isValid() or not 0 <= index.row() < len(self.rows):
             return None
         row = self.rows[index.row()]
@@ -655,27 +662,35 @@ class DueDetailPage(QWidget):
         categories = sorted({str(row.get("신규분류요약") or "").strip() for row in rows if row.get("신규분류요약")}, key=classification_sort_key)
         process = self._selected_process()
         quantity_process = "누수규격" if process == "전체" else process
-        quantities = {
-            category: sum(
-                float(row.get("공정", {}).get(quantity_process, 0) or 0)
-                for row in rows if str(row.get("신규분류요약") or "").strip() == category
-            )
-            for category in categories
-        }
-        while self.classification_layout.count() > 1:
-            item = self.classification_layout.takeAt(1)
-            if item.widget():
-                item.widget().deleteLater()
-        self.classification_buttons = {}
+        by_category = {category: [] for category in categories}
+        for row in rows:
+            category = str(row.get("신규분류요약") or "").strip()
+            if category in by_category:
+                by_category[category].append(float(row.get("공정", {}).get(quantity_process, 0) or 0))
+        quantities = {category: sum(values) for category, values in by_category.items()}
         options = [("전체", sum(quantities.values())), *((category, quantities[category]) for category in categories)]
+        reuse = list(getattr(self, 'classification_buttons', {})) == [name for name, _ in options]
+        if not reuse:
+            while self.classification_layout.count() > 1:
+                item = self.classification_layout.takeAt(1)
+                if item.widget():
+                    item.widget().deleteLater()
+            self.classification_buttons = {}
         for index, (category, quantity) in enumerate(options):
+            checked = category in selected or (category == "전체" and not (selected & set(categories)))
+            if reuse:
+                button = self.classification_buttons[category]
+                button.setText(f"{category} ({format_number(quantity)})")
+                button.setToolTip(f"{category} · {quantity_process} 기준 {format_number(quantity)} pcs")
+                button.setChecked(checked)
+                continue
             button = QPushButton(f"{category} ({format_number(quantity)})")
             button.setObjectName("FilterButton")
             button.setStyleSheet(CLASSIFICATION_BUTTON_STYLE)
             button.setCheckable(True)
             button.setProperty("classification", category)
             button.setToolTip(f"{category} · {quantity_process} 기준 {format_number(quantity)} pcs")
-            button.setChecked(category in selected or (category == "전체" and not (selected & set(categories))))
+            button.setChecked(checked)
             button.clicked.connect(lambda _checked=False, selected_button=button: self._classification_changed(selected_button))
             row, column = divmod(index, 6)
             self.classification_layout.addWidget(button, row, column + 1)
@@ -1059,27 +1074,35 @@ class DueDetailPage(QWidget):
         basis = str(self.name_basis.currentData() or "판매")
         token = self.search.text().strip().casefold()
         due_limit = self._due_limit()
+        all_categories = "전체" in categories
+        all_processes = process == "전체"
+        require_quantity = all_processes and not self.include_packaging
+        workable = getattr(self, "workable_only", None)
+        previous = self.PREVIOUS_PROCESS.get(self.fixed_process or "") if workable is not None and workable.isChecked() else None
+        name_field = f"품명{basis}"
         rows = []
         for source in self.all_rows:
-            if "전체" not in categories and source.get("신규분류요약") not in categories: continue
-            if process != "전체" and float(source.get("공정", {}).get(process, 0) or 0) == 0: continue
-            if process == "전체" and not self.include_packaging and self._whole_process_quantity(source) == 0: continue
-            if (
-                hasattr(self, "workable_only")
-                and self.workable_only.isChecked()
-                and (previous := self.PREVIOUS_PROCESS.get(self.fixed_process or ""))
-                and float(source.get("공정", {}).get(previous, 0) or 0) != 0
-            ):
-                continue
+            if not all_categories and source.get("신규분류요약") not in categories: continue
+            if not all_processes and float(source.get("공정", {}).get(process, 0) or 0) == 0: continue
+            if previous and float(source.get("공정", {}).get(previous, 0) or 0) != 0: continue
             if due_limit is not None:
-                try: row_due = datetime.strptime(str(source.get("납기일") or "")[:10], "%Y-%m-%d").date()
-                except ValueError: continue
+                due_text = str(source.get("납기일") or "")[:10]
+                try:
+                    # The snapshot normally stores YYYY-MM-DD. Keep the legacy
+                    # parser for old records with one-digit months or days.
+                    if len(due_text) == 10 and due_text[4] == due_text[7] == '-':
+                        row_due = date.fromisoformat(due_text)
+                    else:
+                        row_due = datetime.strptime(due_text, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
                 if row_due > due_limit: continue
             if token:
                 haystack = " ".join(str(source.get(key) or "") for key in ("신규분류요약", "이니셜", "수주번호", "T코드", "P코드", "Q코드", "R코드", "품명판매", "품명P", "품명Q", "품명R", "POWER", "CP", "AXIS", "ADD")).casefold()
                 if token not in haystack: continue
+            if require_quantity and self._whole_process_quantity(source) == 0: continue
             row = dict(source)
-            row["품명"] = source.get(f"품명{basis}") or source.get("품명판매") or ""
+            row["품명"] = source.get(name_field) or source.get("품명판매") or ""
             rows.append(row)
         if hasattr(self, "compact_view") and self.compact_view.isChecked():
             rows = self._group_same_process_code(rows, basis)

@@ -104,7 +104,7 @@ class InventoryStatusPage(LiveProductionNeedPage):
             elif label.text()=='품명 기준':label.setText('정렬')
         for widget in (title,self.inventory_status,self.notice,self.tabs):widget.hide()
         layout.setContentsMargins(8,8,8,8);layout.setSpacing(0)
-        self.inventory_ready=True;self.code_visibility();self.fit_inventory_columns();self.export_button.setToolTip('진행현황·납기·신규분류요약 조건의 전체 페이지를 바탕화면에 저장합니다.');self.live_refresh_button.hide();self.calculation_status.hide();self.rebuild()
+        self.inventory_ready=True;self.code_visibility();self.fit_inventory_columns();self.export_button.setToolTip('진행현황·납기·신규분류요약 조건의 전체 페이지를 바탕화면에 저장합니다.');self.live_refresh_button.hide();self.calculation_status.hide()
 
     def resizeEvent(self,event):
         super().resizeEvent(event)
@@ -198,6 +198,8 @@ class InventoryStatusPage(LiveProductionNeedPage):
         self.fit_inventory_columns()
 
     def rebuild(self):
+        if not self.isVisible():
+            return  # MainWindow inherits filters and queues a build when this tab opens.
         request=self.filters()
         if self.future is not None:self.pending=request;return
         self._start(request)

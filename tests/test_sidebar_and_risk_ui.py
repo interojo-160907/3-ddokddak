@@ -156,11 +156,32 @@ class SidebarAndRiskUiTest(unittest.TestCase):
         window._reload_changed_data_views({"live"})
 
         window.live_need_page.reload_data.assert_called_once_with()
-        window.inventory_page.reload_data.assert_called_once_with()
-        window.lot_work_order_page.reload_data.assert_called_once_with()
+        for key, page in [('inventory', window.inventory_page), ('lot_work_order', window.lot_work_order_page)]:
+            page.reload_data.assert_not_called()
+            window._deferred_page_refresh.pop(key)()
+            page.reload_data.assert_called_once_with()
         window.lot_fixed_process_pages["lot_hydration"].reload_data.assert_not_called()
         window._deferred_page_refresh.pop('lot_hydration')()
         window.lot_fixed_process_pages["lot_hydration"].reload_data.assert_called_once_with()
+        window.deleteLater()
+
+    def test_delivery_poll_does_not_reload_unchanged_dashboard(self) -> None:
+        window = self._bare_window()
+        window._data_db_signatures = {'aps': (100, 1)}
+        window._data_status_signatures = {'delivery': (100, 1)}
+        window._current_data_db_signatures = Mock(return_value={'aps': (100, 1)})
+        window._current_data_status_signatures = Mock(return_value={'delivery': (100, 2)})
+        window.dashboard_service = Mock()
+        window._reload_changed_data_views = Mock()
+        window._refresh_settings_data_status = Mock()
+        window._refresh_header_status = Mock()
+        window._check_data_snapshot_changes()
+        window.dashboard_service.load.assert_not_called()
+        window._reload_changed_data_views.assert_not_called()
+        window._refresh_header_status.assert_called_once_with()
+        window._current_data_db_signatures.return_value = {'aps': (110, 3)}
+        window._check_data_snapshot_changes()
+        window._reload_changed_data_views.assert_called_once_with({'aps'})
         window.deleteLater()
 
     def test_settings_page_fits_without_horizontal_scroll(self) -> None:

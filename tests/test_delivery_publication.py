@@ -47,6 +47,20 @@ class PublicationTests(unittest.TestCase):
                 child.assert_not_called();download.assert_not_called()
             self.assertEqual(json.loads(preference.read_text())['aps_minutes'],5)
             self.assertEqual(json.loads((settings/'delivery_status.json').read_text('utf-8'))['applied_version'],'live')
+            # Same-version reinstall cleared completion metadata but retained lidding.
+            completion = settings/'full_refresh_status.json'
+            completion.unlink()
+            with (patch.object(receiver,'resolve_data_root',return_value=root),
+                  patch('services.delivery_groups.head_status',return_value={'groups':[]}),
+                  patch('services.delivery_groups.read_pair',return_value=pair),
+                  patch.object(receiver.tempfile,'mkdtemp',return_value=str(stage)),
+                  patch.object(receiver.subprocess,'run',side_effect=calculate) as child,
+                  patch('services.lidding_data.download',side_effect=receive_lidding),
+                  patch.object(sys,'argv',['delivery_refresh','--full']),
+                  patch('builtins.print')):
+                self.assertEqual(receiver.main.__wrapped__(),0)
+                child.assert_called_once()
+            self.assertTrue(completion.is_file())
 
     def test_failed_child_never_publishes_partial_results(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -43,6 +43,10 @@ def _plain_value(index, preserve_display_text: bool = False) -> str:
 
 class TableClipboardController(QObject):
     def eventFilter(self, watched, event):
+        # Most application events are paint/layout/mouse movement. Only these
+        # three event types need to walk the widget ancestry to find a table.
+        if event.type() not in (QEvent.Show, QEvent.Polish, QEvent.KeyPress):
+            return super().eventFilter(watched, event)
         table = _table_for(watched)
         if table is not None and event.type() in (QEvent.Show, QEvent.Polish):
             table.setSelectionBehavior(QAbstractItemView.SelectItems)

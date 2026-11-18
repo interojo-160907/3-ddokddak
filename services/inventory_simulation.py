@@ -174,12 +174,13 @@ def run() -> dict:
         import time
         app=QApplication.instance() or QApplication([])
         page=InventoryStatusPage(lambda:{})
+        page.resize(1200,650);page.show();page.inherit_filters()
         deadline=time.monotonic()+10
         while time.monotonic()<deadline and not page.result:
             app.processEvents()
             if page.future is not None and page.future.done():page.finish()
         assert page.result and page.model.rowCount()==1, page.inventory_status.text()
-        page.resize(1200,650);page.show();app.processEvents()
+        app.processEvents()
         assert not page.grab().isNull()
         page.debounce.stop();page.poll.stop();page.executor.shutdown(wait=True);page.close();page.deleteLater();app.processEvents()
 
