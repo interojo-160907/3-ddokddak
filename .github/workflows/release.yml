@@ -117,6 +117,18 @@ jobs:
             & '.github\scripts\test-installer-upgrade.ps1' -PriorInstaller (Join-Path $priorDir 'ddokddak-production3-setup.exe') -Installer $installer.FullName -ExpectedVersion $version -PriorVersion $prior.tagName.TrimStart('v')
           }
 
+      - name: Verify optimized same-version replacement
+        if: github.ref_name == 'v3.3.2'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prior = Join-Path $env:RUNNER_TEMP 'production3-original-3.3.2'
+          gh release download v3.3.2 --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $prior
+          if ($LASTEXITCODE -ne 0) { throw 'Original 3.3.2 installer download failed.' }
+          $installer = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
+          .github/scripts/test-installer-upgrade.ps1 -PriorInstaller (Join-Path $prior 'ddokddak-production3-setup.exe') -Installer $installer -ExpectedVersion '3.3.2' -PriorVersion '3.3.2'
+
       - name: Verify rollback to pinned v2.7.10
         shell: pwsh
         env:

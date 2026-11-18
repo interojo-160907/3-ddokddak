@@ -1,11 +1,24 @@
 from datetime import date, timedelta
 from html import escape
 import json
+from concurrent.futures import ThreadPoolExecutor
 from PySide6.QtCore import Signal, QTimer, QDate, Qt, QUrl, QEvent
 from PySide6.QtGui import QColor, QImage, QPainter, QFont, QTextDocument, QPen
 from PySide6.QtWidgets import QApplication, QWidget, QTableWidgetItem, QHeaderView, QFrame, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget, QTextBrowser, QAbstractItemView
 from ui.process_overview_page import KpiCard
 from services.lidding_data import cache_path, build_model, select_rows, STOCK_WAREHOUSES
+
+_loader = ThreadPoolExecutor(max_workers=1, thread_name_prefix='lidding-cache')
+
+def _read_model(path):
+    before = path.stat()
+    bundle = json.loads(path.read_text('utf-8'))
+    model = build_model(bundle)
+    after = path.stat()
+    signature = (before.st_size, before.st_mtime_ns)
+    if signature != (after.st_size, after.st_mtime_ns):
+        raise OSError('리드지 자료 교체 중')
+    return signature, bundle, model
 
 def make_live_page(Base):
     class LivePage(Base):
@@ -14,6 +27,9 @@ def make_live_page(Base):
             self.bundle=None;self.model={};self.visible_rows=[]
             self.receive_status='생산 현황 패키지 수신 대기'
             self._cache_signature=None
+            self._load_future=None
+            self._outside_filter_active=False
+            self._render_pending=False
             super().__init__()
             self.progress.buttonClicked.disconnect(self.filter_rows)
             self.progress.setExclusive(False)
@@ -77,12 +93,33 @@ def make_live_page(Base):
             self.detail_panel.setFixedHeight(self.detail_height())
             self.layout().addWidget(self.detail_panel,0)
             self.detail_panel.hide()
-            QApplication.instance().installEventFilter(self)
+            self.due_end.installEventFilter(self)
             self.due_end.setDate(QDate.currentDate())
             self.detail.hide()
-            self.timer=QTimer(self);self.timer.timeout.connect(self.reload_data);self.timer.start(3000)
-            QTimer.singleShot(0,self.reload_data)
+            self.timer=QTimer(self);self.timer.setInterval(3000);self.timer.timeout.connect(self.reload_data)
+            self.load_poll=QTimer(self);self.load_poll.setInterval(30);self.load_poll.timeout.connect(self._finish_load)
             QTimer.singleShot(0,self.fit_columns)
+
+        def _set_outside_filter(self, enabled):
+            if enabled == self._outside_filter_active:return
+            self._outside_filter_active=enabled
+            app=QApplication.instance()
+            if enabled:app.installEventFilter(self)
+            else:app.removeEventFilter(self)
+
+        def showEvent(self,event):
+            super().showEvent(event)
+            if hasattr(self,'timer'):
+                self.timer.start()
+                if self._render_pending:
+                    self.filter_rows();self._render_pending=False
+                self.reload_data()
+
+        def hideEvent(self,event):
+            self._set_outside_filter(False)
+            if hasattr(self,'timer'):self.timer.stop()
+            if hasattr(self,'detail_panel'):self.detail_panel.hide()
+            super().hideEvent(event)
 
         def resizeEvent(self,event):
             super().resizeEvent(event)
@@ -112,6 +149,7 @@ def make_live_page(Base):
             self.filter_rows()
 
         def close_detail(self):
+            self._set_outside_filter(False)
             self.detail_panel.hide()
             self.table.clearSelection()
             QTimer.singleShot(0,self.fit_columns)
@@ -157,15 +195,31 @@ def make_live_page(Base):
             for i,width in enumerate(widths):self.table.setColumnWidth(i,width)
 
         def reload_data(self):
+            if not self.isVisible() or self._load_future is not None:return
             path=cache_path()
             try:
                 stat=path.stat();signature=(stat.st_size,stat.st_mtime_ns)
                 if signature==self._cache_signature:return
-                self.accept_bundle(json.loads(path.read_text('utf-8')))
-                self._cache_signature=signature
+                self._load_future=_loader.submit(_read_model,path)
+                self.load_poll.start()
+                return
             except FileNotFoundError:
                 self.receive_status='생산 현황 패키지 최초 수신 대기'
                 self.result.setText('생산 현황 패키지 수신 대기')
+            except (OSError,ValueError,KeyError,TypeError):
+                self.receive_status='리드지 자료 확인 필요 · 이전 자료 유지' if self.bundle else '리드지 자료 확인 필요'
+            self.status_changed.emit()
+
+        def _finish_load(self):
+            future=self._load_future
+            if future is None or not future.done():return
+            self.load_poll.stop();self._load_future=None
+            try:
+                signature,bundle,model=future.result()
+                self.bundle=bundle;self.model=model;self._cache_signature=signature
+                if self.isVisible():self.filter_rows()
+                else:self._render_pending=True
+                self.receive_status='양호'
             except (OSError,ValueError,KeyError,TypeError):
                 self.receive_status='리드지 자료 확인 필요 · 이전 자료 유지' if self.bundle else '리드지 자료 확인 필요'
             self.status_changed.emit()
@@ -230,13 +284,16 @@ def make_live_page(Base):
             self.result.setText(f'{len(rows):,}종 · 검사접착(55)' if self.bundle else '패키지 준비 중')
             self.detail.setHtml('')
             self.detail.hide()
-            if hasattr(self,'detail_panel'):self.detail_panel.hide()
+            if hasattr(self,'detail_panel'):
+                self._set_outside_filter(False)
+                self.detail_panel.hide()
             QTimer.singleShot(0,self.fit_columns)
 
         def show_detail(self,row=0,*_):
             if not 0<=row<len(self.visible_rows):return
             self.table.selectRow(row)
             self.detail_panel.show()
+            self._set_outside_filter(True)
             self.detail_tabs.currentWidget().show()
             r=self.visible_rows[row];today=date.fromisoformat(self.bundle['day'])
             title=f"{r['code']} · {r['name']}"

@@ -61,20 +61,64 @@ class LiddingContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d,patch('services.data_location.resolve_data_root',return_value=Path(d)):
             p=cache_path();p.parent.mkdir(parents=True);p.write_text(json.dumps(bundle()),encoding='utf-8')
             page=LiddingInventoryPage();page.timer.stop();page.resize(1640,950);page.show();QTest.qWait(30)
-            page.reload_data();self.assertEqual(len(page.visible_rows),1)
+            page.reload_data()
+            for _ in range(100):
+                if page.visible_rows:break
+                QTest.qWait(10)
+            self.assertEqual(len(page.visible_rows),1)
             with patch('ui.lidding_inventory_page.build_model') as build:
                 for _ in range(20):page.reload_data()
                 build.assert_not_called()
             before=page.table.height();page.show_detail(0);QTest.qWait(30)
+            self.assertTrue(page._outside_filter_active)
             tabs=page.detail_tabs.tabBar();QTest.mouseClick(tabs,Qt.LeftButton,pos=tabs.tabRect(1).center())
             QTest.qWait(30);self.assertTrue(page.detail_panel.isVisible())
             QTest.mouseClick(page,Qt.LeftButton,pos=QPoint(3,3));QTest.qWait(30)
             self.assertFalse(page.detail_panel.isVisible());self.assertEqual(page.table.height(),before)
+            self.assertFalse(page._outside_filter_active)
             page.due.button(4).click();self.assertEqual(page.due_end.date(),QDate.currentDate().addDays(14))
             page.reset_filters()
             for i in range(1,5):page.progress.button(i).click()
             self.assertEqual(page.selected_markets(),{'전체'})
             self.assertEqual(page.table.horizontalScrollBar().maximum(),0)
+            page.show_detail(0);page.hide();app.processEvents()
+            self.assertFalse(page._outside_filter_active)
+            self.assertFalse(page.timer.isActive())
+            with patch('ui.lidding_inventory_page.cache_path') as path:
+                for _ in range(100):page.reload_data()
+                path.assert_not_called()
+            page.close();page.deleteLater();app.processEvents()
+
+    def test_loading_does_not_block_ui_or_publish_partial_model(self):
+        import threading
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import QTimer
+        from PySide6.QtTest import QTest
+        from ui.lidding_inventory_page import LiddingInventoryPage
+        app=QApplication.instance() or QApplication([])
+        started=threading.Event();release=threading.Event();ticks=[]
+        def slow_read(path):
+            started.set();release.wait(3)
+            raise ValueError('incomplete replacement')
+        with tempfile.TemporaryDirectory() as d,patch('services.data_location.resolve_data_root',return_value=Path(d)):
+            p=cache_path();p.parent.mkdir(parents=True);p.write_text('{}',encoding='utf-8')
+            page=LiddingInventoryPage();page.accept_bundle(bundle())
+            old=page.model
+            with patch('ui.lidding_inventory_page._read_model',side_effect=slow_read):
+                page.show()
+                for _ in range(100):
+                    if started.is_set():break
+                    QTest.qWait(10)
+                self.assertTrue(started.is_set())
+                QTimer.singleShot(0,lambda:ticks.append(True));QTest.qWait(30)
+                self.assertTrue(ticks);self.assertIs(page.model,old)
+                release.set()
+                for _ in range(100):
+                    if page._load_future is None:break
+                    QTest.qWait(10)
+                self.assertIsNone(page._load_future)
+                self.assertIs(page.model,old)
+                self.assertIn('이전 자료 유지',page.receive_status)
             page.close();page.deleteLater();app.processEvents()
 
 if __name__=='__main__':unittest.main()
