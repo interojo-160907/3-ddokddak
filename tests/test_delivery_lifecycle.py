@@ -19,7 +19,7 @@ class LifecycleSafetyTests(SafetyTests):
         payload=folder/'locked-payload';payload.write_bytes(b'KEEP UNTIL UNLOCKED')
         original=Path.unlink
         def unlink(path,*args,**kwargs):
-            if path==payload:raise PermissionError('locked')
+            if path.resolve()==payload.resolve():raise PermissionError('locked')
             return original(path,*args,**kwargs)
         with patch.object(Path,'unlink',unlink):
             with self.assertRaises(PermissionError):life.prune_stages(self.owner,base=self.base)
