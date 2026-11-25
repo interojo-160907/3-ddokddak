@@ -5310,11 +5310,16 @@ class MainWindow(QMainWindow):
 
         footer = QHBoxLayout()
         self.collection_schedule_note = QLabel(
-            "주기 변경은 즉시 저장됩니다. · 업데이트 후 정상 자료 반영 시 안전 정리하고, 이후 하루 한 번 정리합니다."
+            "생산3팀 임시 사본은 수집 전·후 자동 정리합니다. · 운영 DB·설정·사용자 파일은 유지합니다."
         )
         self.collection_schedule_note.setObjectName("CollectionNotice")
         footer.addWidget(self.collection_schedule_note)
         footer.addStretch()
+        self.settings_cleanup_button = QPushButton("임시 파일 정리")
+        self.settings_cleanup_button.setObjectName("SecondaryButton")
+        self.settings_cleanup_button.setToolTip("이전 버전의 생산3팀 임시 사본도 정리합니다. 운영 DB·설정·사용자 파일은 유지합니다.")
+        self.settings_cleanup_button.clicked.connect(self._start_data_cleanup)
+        footer.addWidget(self.settings_cleanup_button)
         self.settings_refresh_button = QPushButton("전체 데이터 수집")
         self.settings_refresh_button.setObjectName("PrimaryButton")
         self.settings_refresh_button.clicked.connect(self._start_full_data_refresh)
@@ -5644,7 +5649,11 @@ class MainWindow(QMainWindow):
             elif key == 'live' and ready:
                 controls['error_button'].setVisible(False)
             controls['state'].setText(state)
-            controls['state'].setToolTip(str(calculation_error or report.get('message') or waiting_reason))
+            if key=='live' and report.get('cleanup_error'):
+                controls['state'].setText('임시 파일 정리 필요')
+            elif key=='live' and report.get('status')=='waiting_source' and ('공간 부족' in str(report.get('message')) or '재시도' in str(report.get('message'))):
+                controls['state'].setText('공간 부족 · 정리 필요' if '공간 부족' in report['message'] else '재시도 대기/중지')
+            controls['state'].setToolTip(str(report.get('cleanup_error') or calculation_error or report.get('message') or waiting_reason))
             controls['state'].setStyleSheet('color: #059669;' if ready else 'color: #d97706;')
             stamp=local_clock(report.get('received_at')) if key=='live' else view.get('aps_key',report.get('aps_key','-'))
             applied=view.get('applied_at',report.get('applied_at')) if key=='aps' else report.get('applied_at')
@@ -5870,7 +5879,7 @@ class MainWindow(QMainWindow):
     def _data_cleanup_finished(self, exit_code: int, _exit_status) -> None:
         if hasattr(self, "settings_cleanup_button"):
             self.settings_cleanup_button.setEnabled(True)
-            self.settings_cleanup_button.setText("불필요 데이터 정리")
+            self.settings_cleanup_button.setText("임시 파일 정리")
         if exit_code != 0:
             error = bytes(self.data_cleanup_process.readAllStandardError()).decode("utf-8", errors="replace").strip()
             if hasattr(self, "collection_schedule_note"):
@@ -5884,10 +5893,10 @@ class MainWindow(QMainWindow):
             removed_mb = float(result.get("removed_bytes") or 0) / (1024 * 1024)
             if result.get('status') in ('success','skipped'):
                 self.collection_schedule_note.setText(
-                    f"안전 정리 · {str(result.get('cleaned_at') or '')[:16]} · {removed_mb:,.1f}MB 확보 · 정상 반영 후·10분 주기"
+                    f"임시 파일 정리 · {str(result.get('cleaned_at') or '')[:16]} · {removed_mb:,.1f}MB 확보 · 수집 전·후 및 10분 주기"
                 )
             else:
-                self.collection_schedule_note.setText('안전 정리 보류 · '+str(result.get('reason') or '정상 자료 반영 후 다시 확인합니다.'))
+                self.collection_schedule_note.setText(f'임시 파일 정리 · {removed_mb:,.1f}MB 확보 · '+str(result.get('reason') or '사용 중인 자료는 다음 점검에서 다시 확인합니다.'))
 
     def _start_full_data_refresh(self) -> None:
         if (

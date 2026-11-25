@@ -49,7 +49,20 @@ def run(report_path: str) -> int:
     update_checks = update_buttons()
     from services.inventory_simulation import run as simulate_inventory
     inventory_simulation = simulate_inventory()
+    from services.delivery_lifecycle import prune_stages, record_failure, retry_reason
+    from services.collection_lock import collection_lock
+    with tempfile.TemporaryDirectory(prefix='ddokddak-cleanup-test-') as scratch:
+        base=Path(scratch); owner=base/'operating'; owner.mkdir()
+        sentinel=owner/'user.txt'; sentinel.write_text('KEEP')
+        stage=base/'prod3-delivery-failed'; stage.mkdir()
+        (stage/'delivery-owner.json').write_text(json.dumps({'owner':str(owner.resolve()),'complete':False}))
+        (stage/'payload').write_bytes(b'temporary calculation')
+        with collection_lock(owner):
+            assert len(prune_stages(owner,base=base))==1
+        assert not stage.exists() and sentinel.read_text()=='KEEP'
+        retry={};record_failure(retry,'package')
+        assert retry_reason(retry,'package')
     Path(report_path).write_text(json.dumps({'ok':True,'app_version':__import__('config').APP_VERSION,'numpy':numpy.__version__,
         'inventory_simulation':inventory_simulation, 'update_buttons':update_checks,
-        'checks':['GUI imports','Qt rendering','Excel numeric roundtrip','APS snapshot','R/Q/P matching']}),encoding='utf-8')
+        'checks':['GUI imports','Qt rendering','Excel numeric roundtrip','APS snapshot','R/Q/P matching','failed scratch cleanup','bounded retry']}),encoding='utf-8')
     return 0

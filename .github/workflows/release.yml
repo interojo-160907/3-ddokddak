@@ -118,16 +118,17 @@ jobs:
           }
 
       - name: Verify optimized same-version replacement
-        if: github.ref_name == 'v3.3.2'
+        if: github.ref_name == 'v3.3.2' || github.ref_name == 'v3.3.3'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prior = Join-Path $env:RUNNER_TEMP 'production3-original-3.3.2'
-          gh release download v3.3.2 --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $prior
-          if ($LASTEXITCODE -ne 0) { throw 'Original 3.3.2 installer download failed.' }
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          $prior = Join-Path $env:RUNNER_TEMP ('production3-original-' + $version)
+          gh release download '${{ github.ref_name }}' --repo $env:GITHUB_REPOSITORY --pattern 'ddokddak-production3-setup.exe' --dir $prior
+          if ($LASTEXITCODE -ne 0) { throw 'Original same-version installer download failed.' }
           $installer = (Get-ChildItem 'installer/output/ddokddak-production3-setup-*.exe' | Select-Object -First 1).FullName
-          .github/scripts/test-installer-upgrade.ps1 -PriorInstaller (Join-Path $prior 'ddokddak-production3-setup.exe') -Installer $installer -ExpectedVersion '3.3.2' -PriorVersion '3.3.2'
+          .github/scripts/test-installer-upgrade.ps1 -PriorInstaller (Join-Path $prior 'ddokddak-production3-setup.exe') -Installer $installer -ExpectedVersion $version -PriorVersion $version
 
       - name: Verify rollback to pinned v2.7.10
         shell: pwsh

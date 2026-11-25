@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 from services.data_location import resolve_data_root
 from services.collection_staging import publish_group,recover_publication
 from services.collection_lock import serialized_collection
+from services.delivery_lifecycle import prune_stages, remove_stage, retry_reason, record_failure, clear_retry
 
 FOLDERS=('bom','production-performance','backward-v1/process-status',
          'backward-v1/live-production-need','backward-v1/inventory-status','backward-v1/settings',
@@ -58,6 +59,10 @@ def copy_inputs(source,destination):
             target=destination/file.relative_to(source);target.parent.mkdir(parents=True,exist_ok=True)
             if file.suffix in ('.sqlite','.db'):
                 with closing(sqlite3.connect(file.as_uri()+'?mode=ro',uri=True)) as a,closing(sqlite3.connect(target)) as b:a.backup(b)
+            elif file.name.startswith('item_') and file.suffix=='.json':
+                payload=json.loads(file.read_text('utf-8'))
+                payload.pop('orders',None)  # Partition-wide duplicate, never used by item cache readers.
+                target.write_text(json.dumps(payload,ensure_ascii=False),encoding='utf-8')
             else:shutil.copy2(file,target)
 
 
@@ -82,9 +87,15 @@ def main():
     journal=settings/'delivery_publication.json';recover_publication(journal)
     previous=json.loads(status_path.read_text('utf-8')) if status_path.exists() else {}
     report=dict(previous,checked_at=datetime.now().astimezone().isoformat())
+    stage=None
+    retry_key=None
     def save():
         tmp=status_path.with_suffix('.tmp');tmp.write_text(json.dumps(report,ensure_ascii=False,default=str,indent=2),encoding='utf-8');tmp.replace(status_path)
     try:
+        # Old failed copies must be reclaimed even if no later calculation succeeded.
+        report['temporary_cleanup']=prune_stages(root)
+        report['stage_path']=''
+        report.pop('cleanup_error',None)
         report['server']=head_status(connection)
         report['connection_status']='success'
         latest_aps=next((h for h in report['server']['groups'] if h['group_no']==1),None)
@@ -100,6 +111,7 @@ def main():
         if latest_aps and latest_aps['version']!=aps['version']:
             raise ValueError('새 APS 조회 가능 · 같은 회차 생산 현황 준비 중 · 이전 계산 유지')
         report['available_version']=data['version']
+        retry_key=__import__('config').APP_VERSION+'|scratch-v2|'+data['version']
         from services.lidding_data import cache_ready, cache_path, download as receive_lidding
         # A reinstall can clear the completion report while retaining the
         # package. Rebuild it once so startup bootstrap can finish.
@@ -108,6 +120,9 @@ def main():
                 and cache_ready(root,data['version'])):
             pending=any(h['group_no']==1 and h['version']!=aps['version'] for h in report['server']['groups'])
             report.update(status='waiting_source' if pending else 'success',message='새 APS의 생산 현황 준비 중 · 이전 완성본 유지' if pending else '양호');save();return 0
+        reason=retry_reason(report,retry_key)
+        if reason:
+            report.update(status='waiting_source',message=reason);save();return 2
         check_working_space(root)
         report.update(status='receiving',message='수집계산중');save()
         stage=Path(tempfile.mkdtemp(prefix='prod3-delivery-'))
@@ -164,13 +179,16 @@ def main():
         marker.write_text(json.dumps({'owner':str(root.resolve()),'complete':True}),encoding='utf-8')
         report.pop('calculation_error',None)
         report.pop('calculation_error_at',None)
+        clear_retry(report)
         report.update(status='success',message='양호',applied_version=data['version'],
                       aps_version=aps['version'],aps_key=aps['aps_key'],started_at=data['started_at'],
                       received_at=data['received_at'],applied_at=datetime.now().astimezone().isoformat(),
                       completed_stage_path=str(stage),stage_path='',publication_verified=True)
         save()
-        print(json.dumps(report,ensure_ascii=False,default=str));return 0
+        return 0
     except Exception as exc:
+        if stage is not None and retry_key is not None:
+            record_failure(report,retry_key)
         (settings/'delivery_error.txt').write_text(traceback.format_exc(),encoding='utf-8')
         server_state = report.get('server', {}).get('state') or {}
         report['package_details'] = server_state.get('details') or {}
@@ -178,6 +196,17 @@ def main():
         if report['package_details'].get('reason'):
             message += ' · ' + str(server_state.get('message') or report['package_details']['reason'])
         report.update(status='waiting_source',message=message);save()
-        print(json.dumps(report,ensure_ascii=False,default=str));return 2
+        return 2
+    finally:
+        if stage is not None and stage.exists():
+            try:
+                report['temporary_cleanup']=report.get('temporary_cleanup',[])+[remove_stage(root,stage)]
+                report['stage_path']=''
+                report['completed_stage_path']=''
+            except Exception as exc:
+                report['cleanup_error']=str(exc)
+                report['message']=str(report.get('message',''))+' · 임시 파일 정리 필요: '+str(exc)
+        save()
+        print(json.dumps(report,ensure_ascii=False,default=str))
 
 if __name__=='__main__':raise SystemExit(main())

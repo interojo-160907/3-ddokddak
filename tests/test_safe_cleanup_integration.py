@@ -43,7 +43,9 @@ class AutomaticCleanupTests(unittest.TestCase):
         (self.settings/'version_collection_bootstrap.json').write_text(json.dumps({'completed_version':APP_VERSION}))
         self.status['status']='waiting_source';self.save_status()
         self.assertEqual(cleaner.cleanup(self.owner,self.base,force=True)['status'],'deferred')
-        self.assertTrue(old.exists())
+        # A failed new package must not make disposable, owned copies permanent.
+        self.assertFalse(old.exists())
+        self.assertEqual((self.owner/'bom/product_reference.sqlite').read_bytes(),b'OPERATING DATABASE')
 
     def test_isolated_collector_never_cleans_real_temp(self):
         with patch.dict(os.environ,{'DDOKDDAK_PROD3_STAGE_ROOT':str(self.root)}),patch.object(cleaner,'cleanup') as run,patch('builtins.print'):

@@ -1,4 +1,4 @@
-"""After a healthy update, reclaim only obsolete, owned delivery stages."""
+"""Reclaim owned scratch copies; prune operating backups only when healthy."""
 from contextlib import contextmanager
 from datetime import datetime
 import json
@@ -51,8 +51,11 @@ def cleanup(root, base, *, force=False):
             # Existing verified operating data may safely supersede old temp
             # stages even before the new-version bootstrap has room to run.
             current_bootstrap=bootstrap.get('completed_version')==APP_VERSION
+            from services.delivery_lifecycle import prune_stages
+            with core.collection_guard(root):
+                result['results'].extend(prune_stages(root,base=base))
             state=core.operational_state(root)
-            if (not force and previous.get('completed_version')==APP_VERSION
+            if (not result['results'] and not force and previous.get('completed_version')==APP_VERSION
                     and previous.get('applied_version')==state.get('applied_version')
                     and stamp.timestamp()-datetime.fromisoformat(previous['cleaned_at']).timestamp()<600):
                 return dict(previous,status='skipped',reason='최근 안전 정리를 완료했습니다.')
@@ -88,6 +91,8 @@ def cleanup(root, base, *, force=False):
                               reason='운영 자료와 최신 복구 사본을 보존했습니다.')
         except (OSError,ValueError,TypeError,core.BusyError) as exc:
             result['reason']=str(exc)
+        result['removed_bytes']=sum(r.get('deleted_bytes',0) for r in result['results'])
+        result['removed_folders']=sum(r['status']=='deleted' for r in result['results'])
         temporary=status_path.with_suffix('.tmp')
         core.plain_path(temporary)
         temporary.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')

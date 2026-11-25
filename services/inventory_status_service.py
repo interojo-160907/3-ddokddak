@@ -195,6 +195,8 @@ class InventoryStatusService:
         if data.get('total_count') is not None and len(data['rows'])!=int(data['total_count']):
             raise ValueError(name+' 행 수 불일치')
         data=dict(data)
+        if name.startswith('item_'):
+            data.pop('orders',None)
         if data.pop('_reused',False):
             return {'status':'success','completed_at':data['_collected_at'],'rows':len(data['rows']),'reused':True}
         data['_collected_at']=datetime.now().isoformat(timespec='seconds')
