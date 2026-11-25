@@ -203,8 +203,8 @@ class SidebarAndRiskUiTest(unittest.TestCase):
 
         self.assertEqual(0, page.horizontalScrollBar().maximum())
         self.assertTrue(window.settings_data_status.wordWrap())
-        self.assertFalse(window.collection_controls['live']['schedule'].isEnabled())
-        self.assertEqual(window.collection_controls['live']['schedule'].currentText(),'서버 1시간 · APS 변경 시')
+        self.assertIsInstance(window.collection_controls['live']['schedule'], QLabel)
+        self.assertEqual(window.collection_controls['live']['schedule'].text(),'서버 자동 · 매시간 / APS 변경 시')
         self.assertFalse(any(label.text()=='이전 버전 복구' for label in page.findChildren(QLabel)))
         page.deleteLater()
         window.deleteLater()

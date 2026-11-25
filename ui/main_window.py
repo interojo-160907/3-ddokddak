@@ -5277,7 +5277,9 @@ class MainWindow(QMainWindow):
                 lambda _index, source=key, combo=schedule: self._collection_schedule_changed(source, combo)
             )
             if key == "live":
-                schedule.setEnabled(False)
+                schedule = QLabel("서버 자동 · 매시간 / APS 변경 시")
+                schedule.setObjectName("CollectionCell")
+                schedule.setWordWrap(True)
                 schedule.setToolTip("서버가 매시간과 APS 변경 후 준비합니다. PC는 APS 행의 확인 주기로 새 완성본을 확인합니다.")
             if key in {"production", "hydration"}:
                 schedule.blockSignals(True)
@@ -5429,6 +5431,11 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit
 
         info = self._read_collection_errors().get(source)
+        if source == 'live':
+            delivery = self._read_refresh_status(DATA_CENTER_DIR/'backward-v1/settings/delivery_status.json')
+            if delivery.get('calculation_error'):
+                info = dict(source='생산 현황 계산', occurred_at=delivery.get('calculation_error_at'),
+                            message=delivery['calculation_error'])
         if not isinstance(info, dict):
             return
         source_name = str(info.get("source") or source)
@@ -5630,8 +5637,14 @@ class MainWindow(QMainWindow):
             if key=='aps' and report.get('aps_view_error'):state='APS 수신 확인 필요'
             if key=='live' and waiting_reason:
                 state = str(package_details.get('reason'))
+            calculation_error = report.get('calculation_error') if key=='live' and not ready else ''
+            if calculation_error:
+                state = '계산 재시도 중 · 이전 실패 있음' if report.get('status')=='receiving' else '계산 실패 · 이전 자료 유지'
+                controls['error_button'].setVisible(True)
+            elif key == 'live' and ready:
+                controls['error_button'].setVisible(False)
             controls['state'].setText(state)
-            controls['state'].setToolTip(str(report.get('message') or waiting_reason))
+            controls['state'].setToolTip(str(calculation_error or report.get('message') or waiting_reason))
             controls['state'].setStyleSheet('color: #059669;' if ready else 'color: #d97706;')
             stamp=local_clock(report.get('received_at')) if key=='live' else view.get('aps_key',report.get('aps_key','-'))
             applied=view.get('applied_at',report.get('applied_at')) if key=='aps' else report.get('applied_at')

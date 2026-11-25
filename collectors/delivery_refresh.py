@@ -23,6 +23,18 @@ FOLDERS=('bom','production-performance','backward-v1/process-status',
 EXCLUDE={'backup','backups','snapshots','raw_api','before-publication','recovery'}
 
 
+def calculation_failure(stage):
+    """Expose the actual failed calculation instead of only the child exit code."""
+    try:
+        full=json.loads((stage/'backward-v1/settings/full_refresh_status.json').read_text('utf-8'))
+        live=full.get('results',{}).get('live',{}).get('result',{})
+        message=live.get('result',{}).get('message') or live.get('message')
+        if message:return str(message)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return '완성본 계산 확인 필요 · 기존 자료 유지 (수신 로그 보관)'
+
+
 def input_files(base):
     """Prune archive directories before traversing, rather than after rglob."""
     from services.delivery_stage_cleanup import plain_path
@@ -113,7 +125,9 @@ def main():
                               creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
         (stage/'receive.log').write_bytes(result.stdout+result.stderr)
         if result.returncode!=0:
-            raise ValueError('완성본 계산 확인 필요 · 기존 자료 유지 (수신 로그 보관)')
+            report['calculation_error']=calculation_failure(stage)
+            report['calculation_error_at']=datetime.now().astimezone().isoformat()
+            raise ValueError(report['calculation_error'])
         full=json.loads((stage/'backward-v1/settings/full_refresh_status.json').read_text('utf-8'))
         if full.get('results',{}).get('live',{}).get('status')!='success':raise ValueError('생산 현황 계산 미완료 · 기존 유지')
         receive_lidding(version=data['version'],destination=cache_path(stage))
@@ -148,6 +162,8 @@ def main():
                 with closing(sqlite3.connect(target.as_uri()+'?mode=ro',uri=True)) as db:
                     db.execute('SELECT name FROM sqlite_master LIMIT 1').fetchall()
         marker.write_text(json.dumps({'owner':str(root.resolve()),'complete':True}),encoding='utf-8')
+        report.pop('calculation_error',None)
+        report.pop('calculation_error_at',None)
         report.update(status='success',message='양호',applied_version=data['version'],
                       aps_version=aps['version'],aps_key=aps['aps_key'],started_at=data['started_at'],
                       received_at=data['received_at'],applied_at=datetime.now().astimezone().isoformat(),

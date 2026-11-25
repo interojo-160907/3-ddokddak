@@ -164,6 +164,31 @@ class InventoryStatusService:
         bounded_map(lambda base: self._request('item_'+base, '/api/item-list-bulk',
                                               {'gd_cd':base, 'limit':0}), missing)
 
+    def _ensure_aps_specs(self, selected, bases, *, allow_network):
+        """Refresh existing but incomplete item caches once before calculating."""
+        required = collections.defaultdict(set)
+        for row in selected:
+            code = norm(row['item_id'])
+            if code[:5] in bases:
+                required[code[:5]].add(code)
+        def absent_items():
+            absent = {}
+            for base, expected in required.items():
+                data = json.loads((self.cache/('item_'+base+'.json')).read_text('utf-8'))
+                known = {norm(r.get('gd_cd')) for r in data['rows']
+                         if norm(r.get('sale_cd')) == base}
+                if expected - known:
+                    absent[base] = expected - known
+            return absent
+        absent = absent_items()
+        if absent and allow_network:
+            self._warm_specs(sorted(absent))
+            absent = absent_items()
+        if absent:
+            codes = sorted({code for values in absent.values() for code in values})
+            prefix = '최신 ERP 전체규격 목록에 APS 품목 누락' if allow_network else '저장된 ERP 규격 갱신 필요'
+            raise ValueError(prefix + ': ' + ', '.join(codes[:5]))
+
     def save_response(self,name,data):
         if not isinstance(data,dict) or data.get('truncated') or not isinstance(data.get('rows'),list):
             raise ValueError(name+' 불완전 응답')
@@ -264,6 +289,7 @@ class InventoryStatusService:
         if missing and not allow_network:
             raise ValueError(f'제품 규격 {len(missing)}종 수집 대기')
         self._warm_specs(missing)
+        self._ensure_aps_specs(selected, bases, allow_network=allow_network)
         items={};byopt={};lookup={}
         for b in codes:
             data=json.loads((self.cache/('item_'+b+'.json')).read_text('utf-8'))
