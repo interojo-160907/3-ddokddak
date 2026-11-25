@@ -32,7 +32,7 @@ def remove_stage(root, stage, *, base=None):
         raise ValueError('반영 복구 기록 있음 · 복구 후 임시 자료 정리')
     guard = safety.collection_guard(stage) if (stage/'backward-v1/collection.lock').exists() else nullcontext()
     with guard:
-        files, _, _ = safety.inventory(stage)  # Reject nested junctions/symlinks.
+        files, directories, _ = safety.inventory(stage)  # Reject nested junctions/symlinks.
         size = sum(row[1] for row in files)
         diagnostics = root/'backward-v1/settings/delivery-diagnostics'
         diagnostics.mkdir(parents=True, exist_ok=True)
@@ -40,7 +40,16 @@ def remove_stage(root, stage, *, base=None):
         if not destination.exists():
             safety.archive_diagnostics(stage, destination)
         # Windows cannot remove an open lock file. The parent's lock remains held.
-    shutil.rmtree(stage)
+    # Keep ownership until every payload is gone: an interrupted/denied deletion
+    # must remain discoverable and block the next large copy.
+    marker=stage/'delivery-owner.json'
+    for path, _, _, _ in files:
+        if path != marker:
+            path.unlink()
+    for directory in directories:
+        directory.rmdir()
+    marker.unlink()
+    stage.rmdir()
     entries = sorted((p for p in diagnostics.glob('prod3-delivery-*') if p.is_dir()),
                      key=lambda p:p.stat().st_mtime, reverse=True)
     for old in entries[5:]:

@@ -14,6 +14,20 @@ from tests.test_delivery_stage_cleanup import SafetyTests
 
 
 class LifecycleSafetyTests(SafetyTests):
+    def test_partial_deletion_keeps_owner_for_next_cleanup(self):
+        folder=self.stage('access-denied')
+        payload=folder/'locked-payload';payload.write_bytes(b'KEEP UNTIL UNLOCKED')
+        original=Path.unlink
+        def unlink(path,*args,**kwargs):
+            if path==payload:raise PermissionError('locked')
+            return original(path,*args,**kwargs)
+        with patch.object(Path,'unlink',unlink):
+            with self.assertRaises(PermissionError):life.prune_stages(self.owner,base=self.base)
+            self.assertTrue((folder/'delivery-owner.json').exists())
+            with self.assertRaises(PermissionError):life.prune_stages(self.owner,base=self.base)
+        self.assertEqual(len(life.prune_stages(self.owner,base=self.base)),1)
+        self.assertFalse(folder.exists())
+
     def test_failed_stages_do_not_require_a_later_success(self):
         folder=self.stage('failed',age=1)
         self.status.update(status='waiting_source',applied_at='2026-01-01T00:00:00+00:00')
